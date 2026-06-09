@@ -3,7 +3,8 @@ import { db } from './supabase.js';
 
 // ─── CONSTANTS ─────────────────────────────────────────────────────────────────
 
-const APP_TITLE = "Demande Médaille FNPC";
+const APP_TITLE   = "Demande Médaille FNPC";
+const APP_VERSION = "1.0.0";
 const USE_SUPABASE = true;
 
 // ── PrestaShop Webservice ────────────────────────────────────────────────────
@@ -119,7 +120,7 @@ const STATUSES = {
   valide_federation: { label:'Approuvé',                    color:'#10b981', bg:'#ecfdf5' },
   refuse_dept:       { label:'Refusé APC',                  color:'#ef4444', bg:'#fef2f2' },
   refuse_federation: { label:'Refusé Commission',           color:'#dc2626', bg:'#fef2f2' },
-  diplome_emis:      { label:'Diplôme expédié',             color:'#059669', bg:'#d1fae5' },
+  diplome_emis:      { label:'Diplôme imprimé',             color:'#059669', bg:'#d1fae5' },
   expedie:           { label:'Expédié',                     color:'#7c3aed', bg:'#f5f3ff' },
 };
 
@@ -694,21 +695,65 @@ export default function App() {
     setSelectedBatch([]);
     fire(`${ids.length} diplôme(s) marqué(s) expédié(s) ✓`);
   };
-  const markPaid = id => {
+  const markPaid = async (id) => {
     const req = getReq(id);
-    const newHisto = [...req.historique, { date:today(), action:`Paiement reçu (${tarif}€)`, auteur:'Gestion FNPC', comment:'' }];
-    // If TDR approved (valide_federation) and now paid → auto-emit diploma
+
+    // ── Créer commande PrestaShop D'ABORD ─────────────────────────────────────
+    // Le paiement n'est validé QUE si la commande PS est créée avec succès
+    if (!req.prestashopOrderId) {
+      try {
+        fire('Création commande PrestaShop…');
+        let prodId = psProductId;
+        if (!prodId) {
+          const prod = await prestashop.getProductByRef('DiplomeReco');
+          if (prod?.id) { prodId = prod.id; setPsProductId(prod.id); }
+        }
+        if (!prodId) throw new Error('Produit DiplomeReco introuvable dans PrestaShop');
+
+        const apcAddr = deptAddresses[req.dept];
+        const apcEmail = apcAddr?.email || CONNECTED_USERS['departement']?.email;
+        const customer = await prestashop.getCustomerByEmail(apcEmail);
+        if (!customer?.id) throw new Error(`Compte APC introuvable : ${apcEmail}`);
+
+        const addresses = await prestashop.getCustomerAddresses(customer.id);
+        if (!addresses[0]?.id) throw new Error('Adresse APC introuvable dans PrestaShop');
+
+        const cart = await prestashop.createCart(customer.id, addresses[0].id);
+        if (!cart?.id) throw new Error('Erreur lors de la création du panier PrestaShop');
+
+        const ref   = `FNPC-TDR-${req.dept.split(' ')[0]}-${req.id}`;
+        const order = await prestashop.createOrder(customer.id, cart.id, addresses[0].id, prodId, 1, ref);
+        if (!order?.id) throw new Error('Erreur lors de la création de la commande PrestaShop');
+
+        // PS OK — on mémorise l'ID de commande mais on ne valide pas encore
+        upd(id, { prestashopOrderId: order.id });
+        setPsOrders(p=>[{ dept:req.dept, status:'ok', orderId:order.id, qty:1, ref }, ...p]);
+        fire(`✓ Commande PrestaShop #${order.id} créée`);
+
+      } catch(e) {
+        // BLOQUANT — on arrête ici, le paiement n'est pas validé
+        fire(`Paiement bloqué — Commande PrestaShop échouée : ${e.message}`, 'err');
+        setPsOrders(p=>[{ dept:req.dept, status:'error', msg:e.message }, ...p]);
+        return; // ← sortie anticipée, pas de validation paiement
+      }
+    }
+
+    // ── Validation du paiement (seulement si PS OK ou déjà commandé) ──────────
+    const newHisto = [...req.historique, { date:today(), action:`Paiement reçu (${tarif}€)`, auteur:ROLES[role]?.label||'Gestion', comment:'' }];
+    let updFields = { paiement:'paye', historique:newHisto };
+
     if (req.statut === 'valide_federation' && req.medalType.payant) {
       const counters = { ...diplomeCounters };
       const num = generateDiplomaNumber(req.dept, counters);
       counters[req.dept] = (counters[req.dept]||0) + 1;
       setDiplomeCounters(counters);
-      upd(id, { paiement:'paye', statut:'diplome_emis', diplomeId:num, historique:[...newHisto, { date:today(), action:'Diplôme imprimé', auteur:'Gestion FNPC', comment:`N° ${num}` }] });
+      updFields = { ...updFields, statut:'diplome_emis', diplomeId:num,
+        historique:[...newHisto, { date:today(), action:'Diplôme imprimé', auteur:'Gestion FNPC', comment:`N° ${num}` }] };
       fire(`Paiement validé — Diplôme ${num} imprimé 🎖`);
     } else {
-      upd(id, { paiement:'paye', historique:newHisto });
       fire('Paiement enregistré ✓');
     }
+    upd(id, updFields);
     if (req.notifications) showEmail('paiement_temoignage', req);
   };
   const refuse = (id, comment) => {
@@ -926,7 +971,8 @@ export default function App() {
       ...(role==='departement'?[{key:'pret_commission',label:'Prêts à envoyer',icon:'📦'}]:[]),
       {key:'en_commission',label:'Soumises Commission FNPC',icon:'⚖️'},
       {key:'valide_federation',label:'Approuvé',icon:'✅'},
-      {key:'diplome_emis',label:'Diplôme expédié',icon:'🎖'},
+      {key:'diplome_emis',label:'Diplôme imprimé',icon:'🎖'},
+      {key:'expedie',label:'Expédié',icon:'📬'},
       {key:'refuse_dept',label:'Refusées',icon:'✗', noArrow:true},
     ];
     return (
@@ -997,7 +1043,7 @@ export default function App() {
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14 }}>
           <div>
             <h1 style={H1}>Dashboard Gestion FNPC</h1>
-            <p style={{ color:'#64748b', fontSize:13, marginTop:2 }}>{all.length} demande(s){gDashDept!=='all'?` · ${gDashDept}`:''}{ gDashYear!=='all'?` · ${gDashYear}`:''}</p>
+            <p style={{ color:'#64748b', fontSize:13, marginTop:2 }}>{all.length} demande(s){gDashDept!=='all'?` · ${gDashDept}`:''}{ gDashYear!=='all'?` · ${gDashYear}`:''} · <span style={{ background:'#e0f2fe', color:'#0369a1', borderRadius:10, padding:'1px 7px', fontSize:11, fontWeight:700 }}>v{APP_VERSION}</span></p>
           </div>
           <div style={{ display:'flex', gap:8, alignItems:'center' }}>
             <select className="select" value={gDashDept} onChange={e=>setGDashDept(e.target.value)} style={{ maxWidth:200 }}>
@@ -1301,6 +1347,16 @@ export default function App() {
             <div className="fg"><label className="fl">Compétences <span style={{ color:'#94a3b8', fontWeight:400, fontSize:11 }}>(depuis E-Protec)</span></label><input className="input" value={nrFonctions} readOnly style={{ background:'#f8faff', color:'#64748b' }}/></div>
             <div className="fg" style={{ marginBottom:0 }}><label className="fl">Distinctions antérieures <span style={{ color:'#94a3b8', fontWeight:400, fontSize:11 }}>(depuis E-Protec)</span></label><input className="input" value={nrDistinctions||'Aucune'} readOnly style={{ background:'#f8faff', color:'#64748b' }}/></div>
           </>}
+          {/* Alerte âge minimum 16 ans */}
+          {vol && vol.annee && (new Date().getFullYear() - vol.annee) < 16 && (
+            <div style={{ background:'#fffbeb', border:'1px solid #fbbf24', borderRadius:8, padding:'9px 14px', marginTop:10, fontSize:13, color:'#92400e', display:'flex', gap:8, alignItems:'flex-start' }}>
+              <span style={{ fontSize:16, flexShrink:0 }}>⚠️</span>
+              <div>
+                <strong>Bénévole mineur — âge inférieur à 16 ans</strong><br/>
+                <span style={{ fontSize:12 }}>{vol.prenom} {vol.nom} est né(e) en {vol.annee} ({new Date().getFullYear()-vol.annee} ans). La demande reste possible mais nécessite une attention particulière.</span>
+              </div>
+            </div>
+          )}
         </div>
 
         {vol && <>
@@ -1772,20 +1828,74 @@ export default function App() {
 
   function EmailTemplatesPage() {
     const save = () => { setEmailTemplates(p=>({ ...p, [emKey]:{ sujet:emSujet, corps:emCorps } })); fire('Modèle enregistré ✓'); };
-    const labels = { soumission:'Soumission', validation_apc:'Validation APC', validation_commission:'Approbation', refus_apc:'Refus APC', diplome_emis:'Diplôme imprimé', expedition:'Expédition', paiement_temoignage:'Paiement' };
+
+    // Map each email key to its niveau and label
+    const EMAIL_META = [
+      { key:'soumission',           niveau:'antenne',     label:'Confirmation soumission demande' },
+      { key:'validation_apc',       niveau:'antenne',     label:'Demande validée → APC' },
+      { key:'refus_apc',            niveau:'antenne',     label:'Demande refusée APC' },
+      { key:'validation_commission',niveau:'departement', label:'Dossier approuvé Commission' },
+      { key:'paiement_temoignage',  niveau:'departement', label:'Paiement TDR requis' },
+      { key:'diplome_emis',         niveau:'gestion',     label:'Diplôme imprimé' },
+      { key:'expedition',           niveau:'gestion',     label:'Diplôme expédié' },
+    ];
+
+    const NIVEAU_COLOR = { antenne:'#8b5cf6', departement:'#3b82f6', gestion:'#E87722' };
+    const NIVEAU_LABEL = { antenne:'Antenne', departement:'APC', gestion:'Gestion FNPC' };
+
+    const toggleKey = (niveau, key) => {
+      const cur = emailSettings[niveau]?.[key] ?? false;
+      setEmailSettings(p=>({ ...p, [niveau]:{ ...(p[niveau]||{}), [key]:!cur } }));
+      fire(`Notification "${EMAIL_META.find(m=>m.key===key)?.label}" ${!cur?'activée':'désactivée'} ✓`);
+    };
+
     return (
-      <div style={{ maxWidth:720 }}>
-        <h1 style={H1}>Modèles d'e-mails</h1>
-        <p style={{ color:'#64748b', fontSize:13, marginBottom:18 }}>Variables disponibles : {'{prenom}'}, {'{nom}'}, {'{distinction}'}, {'{date}'}, {'{numero}'}, {'{motif}'}, {'{tarif}'}.</p>
-        <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginBottom:16 }}>
-          {Object.entries(labels).map(([k,l])=><button key={k} className={`tab ${emKey===k?'active':''}`} onClick={()=>setEmKey(k)}>{l}</button>)}
+      <div style={{ maxWidth:760 }}>
+        <h1 style={H1}>Notifications & E-mails</h1>
+        <p style={{ color:'#64748b', fontSize:14, marginBottom:20 }}>Activez ou désactivez chaque type de notification, et personnalisez le modèle d'e-mail correspondant.</p>
+
+        {/* Tableau des notifications avec toggle + lien édition */}
+        <div className="card" style={{ marginBottom:18 }}>
+          <div className="st">Notifications par type d'événement</div>
+          {EMAIL_META.map(({ key, niveau, label }) => {
+            const active = emailSettings[niveau]?.[key] ?? false;
+            return (
+              <div key={key} style={{ display:'flex', alignItems:'center', gap:10, padding:'9px 0', borderBottom:'1px solid #f1f5f9' }}>
+                <span style={{ background:NIVEAU_COLOR[niveau]+'22', color:NIVEAU_COLOR[niveau], borderRadius:20, padding:'2px 9px', fontSize:12, fontWeight:700, flexShrink:0, minWidth:80, textAlign:'center' }}>{NIVEAU_LABEL[niveau]}</span>
+                <span style={{ flex:1, fontSize:14, color:'#374151' }}>✉️ {label}</span>
+                <button className="btn btn-sm"
+                  style={{ background:active?'#059669':'#94a3b8', color:'white', minWidth:96 }}
+                  onClick={()=>toggleKey(niveau, key)}>
+                  {active?'✓ Activé':'✗ Désactivé'}
+                </button>
+                <button className="btn btn-outline btn-sm"
+                  onClick={()=>{ setEmKey(key); setTimeout(()=>document.getElementById('email-editor')?.scrollIntoView({behavior:'smooth'}),100); }}>
+                  ✏️ Modèle
+                </button>
+              </div>
+            );
+          })}
         </div>
-        <div className="card">
-          <div className="fg"><label className="fl">Objet de l'e-mail</label><input className="input" value={emSujet} onChange={e=>setEmSujet(e.target.value)}/></div>
-          <div className="fg"><label className="fl">Corps du message</label><textarea className="textarea" rows={10} value={emCorps} onChange={e=>setEmCorps(e.target.value)}/></div>
+
+        {/* Éditeur de modèle */}
+        <div className="card" id="email-editor">
+          <div className="st">
+            Modèle : {EMAIL_META.find(m=>m.key===emKey)?.label || emKey}
+            <span style={{ marginLeft:10, fontSize:12, color:'#64748b', fontWeight:400 }}>
+              Niveau {NIVEAU_LABEL[EMAIL_META.find(m=>m.key===emKey)?.niveau] || ''}
+            </span>
+          </div>
+          <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:14 }}>
+            {EMAIL_META.map(({ key, label })=>(
+              <button key={key} className={`tab ${emKey===key?'active':''}`} onClick={()=>setEmKey(key)} style={{ fontSize:12 }}>{label}</button>
+            ))}
+          </div>
+          <p style={{ fontSize:12, color:'#94a3b8', marginBottom:12 }}>Variables : {'{prenom}'} {'{nom}'} {'{distinction}'} {'{date}'} {'{numero}'} {'{motif}'} {'{tarif}'}</p>
+          <div className="fg"><label className="fl">Objet</label><input className="input" value={emSujet} onChange={e=>setEmSujet(e.target.value)}/></div>
+          <div className="fg"><label className="fl">Corps du message</label><textarea className="textarea" rows={9} value={emCorps} onChange={e=>setEmCorps(e.target.value)}/></div>
           <div style={{ display:'flex', gap:8 }}>
             <button className="btn btn-orange" onClick={save}>💾 Enregistrer</button>
-            <button className="btn btn-outline btn-sm" onClick={()=>{ const t=DEFAULT_EMAIL_TEMPLATES[emKey]; setEmSujet(t.sujet); setEmCorps(t.corps); }}>↺ Réinitialiser</button>
+            <button className="btn btn-outline btn-sm" onClick={()=>{ const t=DEFAULT_EMAIL_TEMPLATES[emKey]; setEmSujet(t.sujet); setEmCorps(t.corps); }}>↺ Réinitialiser par défaut</button>
           </div>
         </div>
       </div>
@@ -1796,57 +1906,6 @@ export default function App() {
     return (
       <div style={{ maxWidth:680 }}>
         <h1 style={H1}>Paramètres Gestion FNPC</h1>
-
-        {/* Notifications e-mail par niveau */}
-        <div className="card" style={{ marginBottom:14 }}>
-          <div className="st">Notifications e-mail par niveau</div>
-          <p style={{ fontSize:14, color:'#64748b', marginBottom:14 }}>Activez ou désactivez les envois d'e-mail automatiques pour chaque étape et chaque niveau. Les e-mails désactivés sont remplacés par un simple message dans l'interface.</p>
-          {[
-            { niveau:'antenne', label:'Antenne', color:'#8b5cf6', events:[
-              { k:'soumission',  l:'Confirmation soumission demande' },
-              { k:'validation',  l:'Demande validée → APC' },
-              { k:'refus',       l:'Demande refusée' },
-              { k:'rappel15j',   l:'Rappel retard > 15 jours' },
-            ]},
-            { niveau:'departement', label:'APC', color:'#3b82f6', events:[
-              { k:'soumission',    l:'Nouvelle demande reçue' },
-              { k:'validation',    l:'Demande validée → Commission' },
-              { k:'refus',         l:'Demande refusée' },
-              { k:'rappel15j',     l:'Rappel retard > 15 jours' },
-              { k:'tdr_paiement',  l:'Paiement TDR requis' },
-            ]},
-            { niveau:'commission', label:'Commission FNPC', color:'#f59e0b', events:[
-              { k:'validation', l:'Dossier approuvé' },
-              { k:'refus',      l:'Dossier refusé' },
-            ]},
-            { niveau:'gestion', label:'Gestion FNPC', color:'#E87722', events:[
-              { k:'diplome_emis', l:'Diplôme imprimé' },
-              { k:'expedition',   l:'Diplôme expédié' },
-            ]},
-          ].map(({ niveau, label, color, events }) => (
-            <div key={niveau} style={{ marginBottom:16, paddingBottom:16, borderBottom:'1px solid #f1f5f9' }}>
-              <div style={{ fontWeight:700, color, fontSize:15, marginBottom:10 }}>● {label}</div>
-              <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-                {events.map(({ k, l }) => {
-                  const active = emailSettings[niveau]?.[k] ?? false;
-                  return (
-                    <div key={k} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'7px 12px', background:active?'#f0fdf4':'#f8faff', borderRadius:8, border:`1px solid ${active?'#86efac':'#e5e7eb'}` }}>
-                      <span style={{ fontSize:14, color:'#374151' }}>✉️ {l}</span>
-                      <button
-                        className="btn btn-sm"
-                        style={{ background:active?'#059669':'#94a3b8', color:'white', minWidth:90 }}
-                        onClick={()=>{
-                          setEmailSettings(p=>({ ...p, [niveau]:{ ...p[niveau], [k]:!active } }));
-                          fire(`E-mail "${l}" ${!active?'activé':'désactivé'} ✓`);
-                        }}
-                      >{active?'✓ Activé':'✗ Désactivé'}</button>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-        </div>
 
         {/* Messages d'accueil */}
         <div className="card" style={{ marginBottom:14 }}>
@@ -2502,7 +2561,7 @@ export default function App() {
       { id:'medailles', icon:'⭐', label:'Types de médailles' },
       { id:'import_csv', icon:'⬆️', label:'Import Google Forms' },
       { id:'import_excel', icon:'📊', label:'Import Excel' },
-      { id:'email_templates', icon:'✉️', label:'Modèles e-mails' },
+      { id:'email_templates', icon:'✉️', label:'Notifications & E-mails' },
       { id:'parametres', icon:'⚙️', label:'Paramètres' },
     ]:[]),
     ...(['antenne','departement','gestion'].includes(role)?[{ id:'delegues', icon:'👥', label:'Les Délégués' }]:[]),
@@ -2576,8 +2635,8 @@ export default function App() {
         </div>
         <div style={{ display:'flex', alignItems:'center', gap:8 }}>
           {USE_SUPABASE && <span style={{ background:dbConnected?'#d1fae5':'#fef9c3', color:dbConnected?'#059669':'#92400e', borderRadius:20, padding:'3px 9px', fontSize:12, fontWeight:700 }}>{dbConnected?'🟢 BD':'🟡 Démo'}</span>}
-          {/* Role selector: visible en démo ou pour gestion uniquement */}
-          {(!authUser?.id || authUser?.id?.startsWith('demo-') || role==='gestion') && <>
+          {/* Role selector: visible pour gestion (bascule entre niveaux) et mode démo */}
+          {(!authUser?.id || authUser?.id?.startsWith('demo-') || authUser?.role==='gestion') && <>
             <span style={{ fontSize:11, color:'#94a3b8' }}>Vue :</span>
           <select value={role} onChange={e=>{ setRole(e.target.value); setPage('dashboard'); setFilterStatus('all'); setFilterDept('all'); setSearch(''); setSelectedBatch([]); }}
             style={{ background:'rgba(255,255,255,0.1)', color:'white', border:'1px solid rgba(255,255,255,0.2)', fontSize:12, padding:'5px 9px', borderRadius:6 }}>
@@ -2951,6 +3010,7 @@ function DiplomaModal({ req, tarif, onClose }) {
             <div style={{ textAlign:'center', borderTop:'1px solid #f1f5f9', paddingTop:12, marginTop:18, display:'flex', alignItems:'center', justifyContent:'center', gap:10 }}>
               <svg width={16} height={16} viewBox="0 0 100 100"><circle cx="50" cy="50" r="50" fill="#E87722"/><path d="M50 8 Q54 8 56.5 12.5 L93 76 Q95.5 80.5 93 85 Q90.5 89.5 85 89.5 L15 89.5 Q9.5 89.5 7 85 Q4.5 80.5 7 76 L43.5 12.5 Q46 8 50 8 Z" fill="white"/><path d="M50 30 Q53 30 54.5 33 L78 74 Q79.5 77 78 79.5 Q76.5 82 73.5 82 L26.5 82 Q23.5 82 22 79.5 Q20.5 77 22 74 L45.5 33 Q47 30 50 30 Z" fill="#1B3764"/></svg>
               <div style={{ fontSize:9, color:'#c4c9d4', letterSpacing:'1.5px' }}>FÉDÉRATION NATIONALE DE LA PROTECTION CIVILE — DEPUIS 1965</div>
+              <div style={{ fontSize:9, color:'#475569', marginTop:3, letterSpacing:'0.5px' }}>v{APP_VERSION}</div>
               <svg width={16} height={16} viewBox="0 0 100 100"><circle cx="50" cy="50" r="50" fill="#E87722"/><path d="M50 8 Q54 8 56.5 12.5 L93 76 Q95.5 80.5 93 85 Q90.5 89.5 85 89.5 L15 89.5 Q9.5 89.5 7 85 Q4.5 80.5 7 76 L43.5 12.5 Q46 8 50 8 Z" fill="white"/><path d="M50 30 Q53 30 54.5 33 L78 74 Q79.5 77 78 79.5 Q76.5 82 73.5 82 L26.5 82 Q23.5 82 22 79.5 Q20.5 77 22 74 L45.5 33 Q47 30 50 30 Z" fill="#1B3764"/></svg>
             </div>
           </div>
