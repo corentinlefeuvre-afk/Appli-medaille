@@ -53,6 +53,7 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
 // ─── DATA LAYER ──────────────────────────────────────────────────────────────
 
 export const db = {
+  supabase, // expose client for direct queries (auth, etc.)
 
   // DEMANDES
   async loadRequests() {

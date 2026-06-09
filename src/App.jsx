@@ -4,7 +4,69 @@ import { db } from './supabase.js';
 // ─── CONSTANTS ─────────────────────────────────────────────────────────────────
 
 const APP_TITLE = "Demande Médaille FNPC";
-const USE_SUPABASE = true; // Mettre false pour utiliser uniquement les données de démo
+const USE_SUPABASE = true;
+
+// ── PrestaShop Webservice ────────────────────────────────────────────────────
+// Les appels passent par une Netlify Function (proxy serverside) pour éviter les CORS
+const PS_PROXY = '/.netlify/functions/prestashop-proxy';
+
+const psCall = async (path, method = 'GET', xml = null) => {
+  const res = await fetch(PS_PROXY, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, method, xml }),
+  });
+  if (!res.ok) throw new Error('Proxy HTTP ' + res.status);
+  const result = await res.json();
+  if (!result.ok) throw new Error('PrestaShop ' + result.status + ' — ' + JSON.stringify(result.data).slice(0, 120));
+  return result.data;
+};
+
+const prestashop = {
+  async getProductByRef(ref) {
+    const d = await psCall('/products?filter[reference]=' + ref);
+    return d?.products?.[0] ?? null;
+  },
+  async getCustomerByEmail(email) {
+    const d = await psCall('/customers?filter[email]=' + encodeURIComponent(email));
+    return d?.customers?.[0] ?? null;
+  },
+  async getCustomerAddresses(customerId) {
+    const d = await psCall('/addresses?filter[id_customer]=' + customerId);
+    return d?.addresses ?? [];
+  },
+  async createCart(customerId, addressId) {
+    const xml = '<?xml version="1.0" encoding="UTF-8"?>'
+      + '<prestashop xmlns:xlink="http://www.w3.org/1999/xlink"><cart>'
+      + '<id_currency>1</id_currency><id_lang>1</id_lang>'
+      + '<id_customer>' + customerId + '</id_customer>'
+      + '<id_address_delivery>' + addressId + '</id_address_delivery>'
+      + '<id_address_invoice>' + addressId + '</id_address_invoice>'
+      + '<rows></rows></cart></prestashop>';
+    const d = await psCall('/carts', 'POST', xml);
+    return d?.cart ?? null;
+  },
+  async createOrder(customerId, cartId, addressId, productId, qty, reference) {
+    const xml = '<?xml version="1.0" encoding="UTF-8"?>'
+      + '<prestashop xmlns:xlink="http://www.w3.org/1999/xlink"><order>'
+      + '<id_customer>' + customerId + '</id_customer>'
+      + '<id_cart>' + cartId + '</id_cart>'
+      + '<id_address_delivery>' + addressId + '</id_address_delivery>'
+      + '<id_address_invoice>' + addressId + '</id_address_invoice>'
+      + '<id_currency>1</id_currency><id_lang>1</id_lang><id_carrier>1</id_carrier>'
+      + '<module>ps_checkpayment</module><payment>Cheque</payment>'
+      + '<current_state>2</current_state>'
+      + '<reference>' + reference + '</reference>'
+      + '<order_rows><order_row>'
+      + '<id_product>' + productId + '</id_product>'
+      + '<product_quantity>' + qty + '</product_quantity>'
+      + '<id_product_attribute>0</id_product_attribute>'
+      + '</order_row></order_rows>'
+      + '</order></prestashop>';
+    const d = await psCall('/orders', 'POST', xml);
+    return d?.order ?? null;
+  },
+};
 
 // Mock du compte connecté — en prod, viendra du SSO
 const CONNECTED_USERS = {
@@ -262,7 +324,51 @@ const Logo = ({ size = 40 }) => <img src={LOGO_SRC} width={size} height={size} a
 // ─── APP ──────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  // ── Supabase : chargement initial ──────────────────────────────────────────
+  // ── Auth : restaure la session depuis sessionStorage ─────────────────────
+  useEffect(() => {
+    const saved = sessionStorage.getItem('fnpc_user');
+    if (saved) {
+      try {
+        const u = JSON.parse(saved);
+        setAuthUser(u);
+        setRole(u.role);
+      } catch { sessionStorage.removeItem('fnpc_user'); }
+    }
+  }, []);
+
+  const doLogin = async () => {
+    if (!loginEmail || !loginPassword) { setLoginError('Renseignez votre e-mail et mot de passe.'); return; }
+    setLoginLoading(true); setLoginError('');
+    try {
+      // Chercher l'utilisateur dans Supabase
+      const { data, error } = await db.supabase
+        .from('app_users')
+        .select('*')
+        .eq('email', loginEmail.toLowerCase().trim())
+        .eq('password', loginPassword)
+        .eq('actif', true)
+        .single();
+      if (error || !data) {
+        setLoginError('E-mail ou mot de passe incorrect, ou compte désactivé.');
+        setLoginLoading(false); return;
+      }
+      const u = { id:data.id, email:data.email, nom:data.nom, prenom:data.prenom, role:data.role, dept:data.dept, antenne:data.antenne };
+      setAuthUser(u);
+      setRole(u.role);
+      sessionStorage.setItem('fnpc_user', JSON.stringify(u));
+      setPage('dashboard');
+    } catch(e) {
+      setLoginError('Erreur de connexion : ' + e.message);
+    }
+    setLoginLoading(false);
+  };
+
+  const doLogout = () => {
+    setAuthUser(null);
+    sessionStorage.removeItem('fnpc_user');
+    setLoginEmail(''); setLoginPassword(''); setLoginError('');
+    setPage('dashboard');
+  };
   useEffect(() => {
     if (!USE_SUPABASE) { setDbLoading(false); return; }
     (async () => {
@@ -297,6 +403,12 @@ export default function App() {
   const [dbLoading, setDbLoading] = useState(true);
   const [dbConnected, setDbConnected] = useState(false);
   const [role, setRole]           = useState('departement');
+  // Auth
+  const [authUser, setAuthUser]   = useState(null);   // null = non connecté
+  const [loginEmail, setLoginEmail]       = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginError, setLoginError]       = useState('');
+  const [loginLoading, setLoginLoading]   = useState(false);
   const [page, setPage]           = useState('dashboard');
   const [requests, setRequests]   = useState(INITIAL_REQUESTS);
   const [selected, setSelected]   = useState(null);
@@ -335,6 +447,12 @@ export default function App() {
   const [commissionCanCreate, setCommissionCanCreate] = useState(false);
   const [gestionCanCreate, setGestionCanCreate]       = useState(false);
   const [welcomeMessages, setWelcomeMessages] = useState({ antenne: '', departement: '' });
+  const [emailSettings, setEmailSettings] = useState({
+    antenne:     { soumission:false, validation:false, refus:false, rappel15j:false },
+    departement: { soumission:false, validation:false, refus:false, rappel15j:false, tdr_paiement:false },
+    commission:  { validation:false, refus:false },
+    gestion:     { diplome_emis:false, expedition:false },
+  });
   const [agrafes, setAgrafes] = useState([]);
   const [delegates, setDelegates] = useState([
     { id:'D001', nom:'Dupont', prenom:'René', email:'r.dupont@pc75.fr', niveau:'antenne', delegueePar:'Président Antenne Paris 12e', date:'2024-10-01', actif:true, permissions:{ lecture:true, demandes:true, validation:false } },
@@ -367,14 +485,17 @@ export default function App() {
   const [paramWmA, setParamWmA] = useState('');
   const [paramWmD, setParamWmD] = useState('');
   const [paramAgrNom, setParamAgrNom] = useState('');
+  const [paramAgrTexte, setParamAgrTexte] = useState('');
   const [paramAgrDepts, setParamAgrDepts] = useState([]);
   const [agrEditId, setAgrEditId] = useState(null);
   const [agrEditDepts, setAgrEditDepts] = useState([]);
   const [editReqId, setEditReqId] = useState(null);
   const [gDashDept, setGDashDept] = useState('all');
   const [gDashYear, setGDashYear] = useState('all');
-  // Custom medal type creation
-  const [newMedalLabel, setNewMedalLabel] = useState('');
+  // PrestaShop state
+  const [psProductId, setPsProductId] = useState(null);
+  const [psLoading, setPsLoading] = useState(false);
+  const [psOrders, setPsOrders] = useState([]); // history of created orders
   const [newMedalShort, setNewMedalShort] = useState('');
   const [newMedalYears, setNewMedalYears] = useState('');
   const [newMedalColor, setNewMedalColor] = useState('#1B3764');
@@ -781,7 +902,7 @@ export default function App() {
       case 'import_csv':        return ImportCSVPage();
       case 'email_templates':   return EmailTemplatesPage();
       case 'statistiques':      return StatistiquesPage();
-      case 'tdr_paiement':      return TdrPaiementPage();
+      case 'prestashop':        return PrestashopPage();
       case 'mon_compte':        return MonComptePage();
       case 'medailles':         return MedaillesPage();
       case 'import_excel':      return ImportExcelPage();
@@ -1676,6 +1797,57 @@ export default function App() {
       <div style={{ maxWidth:680 }}>
         <h1 style={H1}>Paramètres Gestion FNPC</h1>
 
+        {/* Notifications e-mail par niveau */}
+        <div className="card" style={{ marginBottom:14 }}>
+          <div className="st">Notifications e-mail par niveau</div>
+          <p style={{ fontSize:14, color:'#64748b', marginBottom:14 }}>Activez ou désactivez les envois d'e-mail automatiques pour chaque étape et chaque niveau. Les e-mails désactivés sont remplacés par un simple message dans l'interface.</p>
+          {[
+            { niveau:'antenne', label:'Antenne', color:'#8b5cf6', events:[
+              { k:'soumission',  l:'Confirmation soumission demande' },
+              { k:'validation',  l:'Demande validée → APC' },
+              { k:'refus',       l:'Demande refusée' },
+              { k:'rappel15j',   l:'Rappel retard > 15 jours' },
+            ]},
+            { niveau:'departement', label:'APC', color:'#3b82f6', events:[
+              { k:'soumission',    l:'Nouvelle demande reçue' },
+              { k:'validation',    l:'Demande validée → Commission' },
+              { k:'refus',         l:'Demande refusée' },
+              { k:'rappel15j',     l:'Rappel retard > 15 jours' },
+              { k:'tdr_paiement',  l:'Paiement TDR requis' },
+            ]},
+            { niveau:'commission', label:'Commission FNPC', color:'#f59e0b', events:[
+              { k:'validation', l:'Dossier approuvé' },
+              { k:'refus',      l:'Dossier refusé' },
+            ]},
+            { niveau:'gestion', label:'Gestion FNPC', color:'#E87722', events:[
+              { k:'diplome_emis', l:'Diplôme imprimé' },
+              { k:'expedition',   l:'Diplôme expédié' },
+            ]},
+          ].map(({ niveau, label, color, events }) => (
+            <div key={niveau} style={{ marginBottom:16, paddingBottom:16, borderBottom:'1px solid #f1f5f9' }}>
+              <div style={{ fontWeight:700, color, fontSize:15, marginBottom:10 }}>● {label}</div>
+              <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+                {events.map(({ k, l }) => {
+                  const active = emailSettings[niveau]?.[k] ?? false;
+                  return (
+                    <div key={k} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'7px 12px', background:active?'#f0fdf4':'#f8faff', borderRadius:8, border:`1px solid ${active?'#86efac':'#e5e7eb'}` }}>
+                      <span style={{ fontSize:14, color:'#374151' }}>✉️ {l}</span>
+                      <button
+                        className="btn btn-sm"
+                        style={{ background:active?'#059669':'#94a3b8', color:'white', minWidth:90 }}
+                        onClick={()=>{
+                          setEmailSettings(p=>({ ...p, [niveau]:{ ...p[niveau], [k]:!active } }));
+                          fire(`E-mail "${l}" ${!active?'activé':'désactivé'} ✓`);
+                        }}
+                      >{active?'✓ Activé':'✗ Désactivé'}</button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+
         {/* Messages d'accueil */}
         <div className="card" style={{ marginBottom:14 }}>
           <div className="st">Messages d'accueil</div>
@@ -1754,9 +1926,15 @@ export default function App() {
                 if(!agReqs.length){ fire('Aucune demande validée pour cette agrafe','err'); return; }
                 const byMedal = {};
                 agReqs.forEach(r=>{ const k=r.medalType.label; if(!byMedal[k])byMedal[k]=[]; byMedal[k].push(r); });
-                let txt = `FÉDÉRATION NATIONALE DE LA PROTECTION CIVILE\nListe des récipiendaires — ${ag.nom}\nGénéré le ${today()}\n\n`;
-                txt += `Préambule\nSur proposition des Présidents d'APC et après étude des dossiers par la commission honneurs et récompenses, les distinctions suivantes ont été attribuées dans le cadre de ${ag.nom}.\n\n`;
-                txt += `Liste des personnels distingués\n\n`;
+                let txt = 'FÉDÉRATION NATIONALE DE LA PROTECTION CIVILE\n';
+                txt += 'Liste des récipiendaires — ' + ag.nom + '\n';
+                txt += 'Généré le ' + today() + '\n';
+                txt += '='.repeat(60) + '\n\n';
+                if (ag.texte) {
+                  txt += ag.texte + '\n\n';
+                  txt += '─'.repeat(60) + '\n\n';
+                }
+                txt += 'LISTE DES PERSONNELS DISTINGUÉS\n\n';
                 Object.entries(byMedal).sort().forEach(([medal,reqs])=>{
                   txt += `${medal}\n${'—'.repeat(medal.length)}\n`;
                   reqs.forEach(r=>{ const civ=r.benevole.genre==='F'?'Mme':'M'; txt += `${civ} ${r.benevole.nom} ${r.benevole.prenom}, bénévole de la Protection Civile de ${r.dept.split(' - ')[1]||r.dept}\n`; });
@@ -1789,13 +1967,24 @@ export default function App() {
             <input className="input" placeholder="Ex: Médaille Exceptionnelle Inondations 2025" value={paramAgrNom} onChange={e=>setParamAgrNom(e.target.value)}/>
           </div>
           <div className="fg">
+            <label className="fl">Texte du document <span style={{ color:'#94a3b8', fontWeight:400 }}>(préambule intégré dans la liste des récipiendaires)</span></label>
+            <textarea className="textarea" rows={4}
+              placeholder={"Ex : Sur proposition des Présidents d'APC et après étude des dossiers par la commission honneurs et récompenses, les distinctions suivantes ont été attribuées dans le cadre des Médailles Exceptionnelles Crise 2024-2025, en reconnaissance de l'engagement exceptionnel des bénévoles lors des interventions de crise."}
+              value={paramAgrTexte} onChange={e=>setParamAgrTexte(e.target.value)}/>
+            <p className="fh">Ce texte apparaîtra dans le document généré, après le titre et avant la liste des récipiendaires.</p>
+          </div>
+          <div className="fg">
             <label className="fl">Départements concernés * <span style={{ color:'#94a3b8', fontWeight:400 }}>(Ctrl/Cmd pour sélection multiple)</span></label>
             <select className="select" multiple style={{ height:120 }} value={paramAgrDepts} onChange={e=>setParamAgrDepts([...e.target.selectedOptions].map(o=>o.value))}>
               {DEPTS.map(d=><option key={d} value={d}>{d}</option>)}
             </select>
             {paramAgrDepts.length > 0 && <p className="fh" style={{ color:'#E87722' }}>{paramAgrDepts.length} sélectionné(s) : {paramAgrDepts.slice(0,3).join(', ')}{paramAgrDepts.length>3?'...':''}</p>}
           </div>
-          <button className="btn btn-orange" disabled={!paramAgrNom||!paramAgrDepts.length} onClick={()=>{ setAgrafes(p=>[...p,{ id:`AGR${Date.now()}`, nom:paramAgrNom, depts:paramAgrDepts, actif:true }]); setParamAgrNom(''); setParamAgrDepts([]); fire('Agrafe créée ✓'); }}>
+          <button className="btn btn-orange" disabled={!paramAgrNom||!paramAgrDepts.length} onClick={()=>{
+            setAgrafes(p=>[...p,{ id:`AGR${Date.now()}`, nom:paramAgrNom, texte:paramAgrTexte, depts:paramAgrDepts, actif:true }]);
+            setParamAgrNom(''); setParamAgrTexte(''); setParamAgrDepts([]);
+            fire('Agrafe créée ✓');
+          }}>
             🏅 Créer l'agrafe
           </button>
         </div>
@@ -1973,6 +2162,172 @@ export default function App() {
     );
   }
 
+  function PrestashopPage() {
+    // TDR validated yesterday or before, not yet ordered
+    const yesterday = new Date(); yesterday.setDate(yesterday.getDate()-1); yesterday.setHours(0,0,0,0);
+    const toOrder = requests.filter(r =>
+      r.statut === 'valide_federation' && r.medalType.payant && !r.prestashopOrderId
+    );
+    // Group by dept
+    const byDept = toOrder.reduce((acc, r) => {
+      if (!acc[r.dept]) acc[r.dept] = [];
+      acc[r.dept].push(r);
+      return acc;
+    }, {});
+
+    const createOrders = async () => {
+      if (!Object.keys(byDept).length) { fire('Aucune commande à créer', 'err'); return; }
+      setPsLoading(true);
+      try {
+        // 1. Get product ID once
+        let productId = psProductId;
+        if (!productId) {
+          fire('Recherche produit DiplomeReco dans PrestaShop...');
+          const prod = await prestashop.getProductByRef('DiplomeReco');
+          if (!prod?.id) throw new Error('Produit DiplomeReco introuvable dans PrestaShop');
+          productId = prod.id;
+          setPsProductId(productId);
+        }
+
+        const results = [];
+        for (const [dept, reqs] of Object.entries(byDept)) {
+          // 2. Get APC customer by email
+          const apcAddr = deptAddresses[dept];
+          const apcEmail = apcAddr?.email || `apc.${dept.split(' ')[0].toLowerCase()}@protection-civile.org`;
+          fire(`Recherche compte APC ${dept}...`);
+          const customer = await prestashop.getCustomerByEmail(apcEmail);
+          if (!customer?.id) {
+            results.push({ dept, status:'error', msg:`Compte APC introuvable pour ${apcEmail}` });
+            continue;
+          }
+
+          // 3. Get address
+          const addresses = await prestashop.getCustomerAddresses(customer.id);
+          const addrId = addresses[0]?.id;
+          if (!addrId) {
+            results.push({ dept, status:'error', msg:'Aucune adresse trouvée pour ce client' });
+            continue;
+          }
+
+          // 4. Create cart
+          const cart = await prestashop.createCart(customer.id, addrId);
+          if (!cart?.id) {
+            results.push({ dept, status:'error', msg:'Erreur création panier' });
+            continue;
+          }
+
+          // 5. Create order (qty = nb TDR du département)
+          const ref = `FNPC-TDR-${dept.split(' ')[0]}-${today()}`;
+          const order = await prestashop.createOrder(customer.id, cart.id, addrId, productId, reqs.length, ref);
+          if (!order?.id) {
+            results.push({ dept, status:'error', msg:'Erreur création commande' });
+            continue;
+          }
+
+          // 6. Mark requests as ordered
+          reqs.forEach(r => upd(r.id, { prestashopOrderId: order.id, paiement:'commande_creee' }));
+          results.push({ dept, status:'ok', orderId:order.id, qty:reqs.length, ref });
+        }
+
+        setPsOrders(p => [...results, ...p]);
+        const ok = results.filter(r=>r.status==='ok').length;
+        const err = results.filter(r=>r.status==='error').length;
+        fire(`${ok} commande(s) créée(s)${err>0?` · ${err} erreur(s)`:''}${err===0?' ✓':''}`);
+      } catch(e) {
+        fire(`Erreur PrestaShop : ${e.message}`, 'err');
+        console.error('PrestaShop error:', e);
+      } finally {
+        setPsLoading(false);
+      }
+    };
+
+    return (
+      <div style={{ maxWidth:760 }}>
+        <h1 style={H1}>Commandes PrestaShop — TDR groupés</h1>
+        <p style={{ color:'#64748b', fontSize:15, marginBottom:18 }}>
+          Les commandes sont regroupées <strong>par département APC</strong> et créées sur le compte PrestaShop de l'APC concernée.
+          Une commande = tous les TDR validés d'un département.
+        </p>
+
+        {/* Bandeau connexion PS */}
+        <div style={{ background:'#f0fdf4', border:'1px solid #86efac', borderRadius:10, padding:'10px 16px', marginBottom:16, fontSize:14, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+          <span>🛒 PrestaShop : <strong>boutique-preprod.protection-civile.org</strong> · Produit : <strong>DiplomeReco</strong></span>
+          <span style={{ color:'#059669', fontWeight:700 }}>{psProductId ? `✓ Produit ID ${psProductId}` : '⏳ ID non chargé'}</span>
+        </div>
+
+        {/* TDR à commander */}
+        {Object.keys(byDept).length === 0 ? (
+          <div className="card" style={{ textAlign:'center', padding:40, color:'#94a3b8' }}>
+            ✅ Aucun TDR en attente de commande PrestaShop
+          </div>
+        ) : (
+          <>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
+              <div>
+                <div style={{ fontWeight:700, color:'#1B3764', fontSize:16 }}>
+                  {toOrder.length} TDR à commander — {Object.keys(byDept).length} commande(s) à créer
+                </div>
+                <div style={{ fontSize:13, color:'#64748b', marginTop:2 }}>
+                  Regroupés par département · une commande par APC
+                </div>
+              </div>
+              <button
+                className="btn btn-orange"
+                style={{ opacity: psLoading?0.6:1 }}
+                disabled={psLoading}
+                onClick={createOrders}
+              >
+                {psLoading ? '⏳ Création en cours…' : '🛒 Créer les commandes groupées'}
+              </button>
+            </div>
+
+            {Object.entries(byDept).map(([dept, reqs]) => (
+              <div key={dept} className="card" style={{ marginBottom:8, borderLeft:'4px solid #E87722' }}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                  <div>
+                    <div style={{ fontWeight:700, color:'#1B3764', fontSize:15 }}>{dept}</div>
+                    <div style={{ fontSize:13, color:'#64748b', marginTop:2 }}>
+                      {reqs.length} TDR · {reqs.map(r=>`${r.benevole.prenom} ${r.benevole.nom}`).join(', ')}
+                    </div>
+                  </div>
+                  <div style={{ textAlign:'right' }}>
+                    <div style={{ fontWeight:700, color:'#E87722', fontSize:16 }}>{reqs.length * tarif} €</div>
+                    <div style={{ fontSize:12, color:'#94a3b8' }}>{reqs.length} × {tarif}€</div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+
+        {/* Historique commandes */}
+        {psOrders.length > 0 && (
+          <div style={{ marginTop:24 }}>
+            <h2 style={H2}>Historique des commandes créées</h2>
+            {psOrders.map((o, i) => (
+              <div key={i} className="card" style={{ marginBottom:8, borderLeft:`4px solid ${o.status==='ok'?'#059669':'#dc2626'}`, padding:'10px 16px' }}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                  <div>
+                    <div style={{ fontWeight:700, color:'#1B3764', fontSize:14 }}>{o.dept}</div>
+                    {o.status==='ok' && <div style={{ fontSize:12, color:'#64748b', marginTop:2 }}>Commande #{o.orderId} · {o.qty} TDR · Réf. {o.ref}</div>}
+                    {o.status==='error' && <div style={{ fontSize:12, color:'#dc2626', marginTop:2 }}>⚠️ {o.msg}</div>}
+                  </div>
+                  <span style={{ background:o.status==='ok'?'#d1fae5':'#fef2f2', color:o.status==='ok'?'#059669':'#dc2626', borderRadius:20, padding:'2px 10px', fontSize:13, fontWeight:700 }}>
+                    {o.status==='ok'?'✓ Créée':'✗ Erreur'}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div style={{ background:'#f0fdf4', border:'1px solid #86efac', borderRadius:8, padding:'10px 14px', marginTop:20, fontSize:13, color:'#065f46' }}>
+          ✓ <strong>Proxy Netlify activé</strong> — Les appels PrestaShop transitent par une Netlify Function serverside (<code>/.netlify/functions/prestashop-proxy</code>). Aucune configuration CORS requise côté PrestaShop.
+        </div>
+      </div>
+    );
+  }
+
   function TdrPaiementPage() {
     const myDept = lockedDept || '75 - Paris Seine';
     const tdrDept = requests.filter(r => r.dept === myDept && r.statut === 'valide_federation' && r.medalType.payant && r.paiement !== 'paye');
@@ -2107,6 +2462,28 @@ export default function App() {
             ))}
           </div>
         )}
+        {/* Préférences notifications personnelles */}
+        <div className="card">
+          <div className="st">Mes préférences de notification</div>
+          <p style={{ fontSize:14, color:'#64748b', marginBottom:14 }}>Choisissez les e-mails que vous souhaitez recevoir pour votre niveau. Ces réglages s'appliquent à votre compte uniquement.</p>
+          {Object.entries(emailSettings[role] || {}).map(([k, active]) => {
+            const labels = {
+              soumission:'Confirmation soumission demande', validation:'Demande validée',
+              refus:'Demande refusée', rappel15j:'Rappel retard > 15 jours',
+              tdr_paiement:'Paiement TDR requis', diplome_emis:'Diplôme imprimé', expedition:'Diplôme expédié',
+            };
+            return (
+              <div key={k} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'8px 0', borderBottom:'1px solid #f1f5f9' }}>
+                <span style={{ fontSize:14, color:'#374151' }}>✉️ {labels[k]||k}</span>
+                <button
+                  className="btn btn-sm"
+                  style={{ background:active?'#059669':'#94a3b8', color:'white', minWidth:90 }}
+                  onClick={()=>{ setEmailSettings(p=>({...p,[role]:{...p[role],[k]:!active}})); fire(`Notification ${!active?'activée':'désactivée'} ✓`); }}
+                >{active?'✓ Activé':'✗ Désactivé'}</button>
+              </div>
+            );
+          })}
+        </div>
       </div>
     );
   }
@@ -2121,6 +2498,7 @@ export default function App() {
     ...(role==='gestion'?[
       { id:'diplomes', icon:'🎖', label:'Diplômes', badge:(stats.toExpedite||null) },
       { id:'agrafes', icon:'🏅', label:'Agrafes' },
+      { id:'prestashop', icon:'🛒', label:'Commandes PrestaShop', badge: requests.filter(r=>r.statut==='en_commission'&&r.medalType.payant&&!r.prestashopOrderId&&new Date(r.dateCreation)<new Date(Date.now()-86400000)).length || null },
       { id:'medailles', icon:'⭐', label:'Types de médailles' },
       { id:'import_csv', icon:'⬆️', label:'Import Google Forms' },
       { id:'import_excel', icon:'📊', label:'Import Excel' },
@@ -2134,6 +2512,49 @@ export default function App() {
 
   const H1 = { fontFamily:'Playfair Display,serif', fontSize:22, color:'#1B3764', fontWeight:700, marginBottom:4 };
   const H2 = { fontFamily:'Playfair Display,serif', fontSize:15, color:'#1B3764', fontWeight:600, marginBottom:12 };
+
+  // ── Page de connexion ─────────────────────────────────────────────────────
+  if (!authUser && !dbLoading) return (
+    <div style={{ minHeight:'100vh', background:'linear-gradient(160deg,#1B3764 0%,#0f2347 55%,#E87722 100%)', display:'flex', alignItems:'center', justifyContent:'center', padding:24 }}>
+      <div style={{ background:'white', borderRadius:20, padding:40, width:'100%', maxWidth:420, boxShadow:'0 24px 60px rgba(0,0,0,0.3)' }}>
+        <div style={{ textAlign:'center', marginBottom:28 }}>
+          <img src={LOGO_SRC} width={72} height={72} alt="FNPC" style={{ borderRadius:'50%', marginBottom:14 }}/>
+          <div style={{ fontFamily:'Playfair Display,serif', fontSize:22, fontWeight:700, color:'#1B3764' }}>Protection Civile</div>
+          <div style={{ fontSize:14, color:'#64748b', marginTop:4 }}>Gestion des Distinctions et Médailles</div>
+        </div>
+        <div style={{ marginBottom:14 }}>
+          <label style={{ fontSize:14, fontWeight:700, color:'#374151', display:'block', marginBottom:5 }}>E-mail</label>
+          <input className="input" type="email" placeholder="votre@email.fr" value={loginEmail}
+            onChange={e=>{ setLoginEmail(e.target.value); setLoginError(''); }}
+            onKeyDown={e=>e.key==='Enter'&&doLogin()} style={{ fontSize:15 }} autoFocus/>
+        </div>
+        <div style={{ marginBottom:20 }}>
+          <label style={{ fontSize:14, fontWeight:700, color:'#374151', display:'block', marginBottom:5 }}>Mot de passe</label>
+          <input className="input" type="password" placeholder="••••••••" value={loginPassword}
+            onChange={e=>{ setLoginPassword(e.target.value); setLoginError(''); }}
+            onKeyDown={e=>e.key==='Enter'&&doLogin()} style={{ fontSize:15 }}/>
+        </div>
+        {loginError && <div style={{ background:'#fef2f2', border:'1px solid #fecaca', borderRadius:8, padding:'9px 12px', marginBottom:14, fontSize:13, color:'#dc2626' }}>⚠️ {loginError}</div>}
+        <button className="btn btn-orange" style={{ width:'100%', justifyContent:'center', fontSize:16, padding:'12px', opacity:loginLoading?0.7:1 }}
+          onClick={doLogin} disabled={loginLoading}>{loginLoading?'⏳ Connexion…':'Se connecter'}</button>
+        <div style={{ textAlign:'center', marginTop:18, fontSize:12, color:'#94a3b8' }}>
+          Accès réservé aux membres habilités FNPC<br/>
+          Pour obtenir vos identifiants, contactez la Gestion FNPC
+        </div>
+        <details style={{ marginTop:20 }}>
+          <summary style={{ fontSize:12, color:'#cbd5e1', cursor:'pointer', textAlign:'center' }}>Accès démonstration interne</summary>
+          <div style={{ marginTop:10, display:'flex', flexDirection:'column', gap:6 }}>
+            {[['antenne','Antenne Paris 12e'],['departement','APC 75 - Paris Seine'],['commission','Commission FNPC'],['gestion','Gestion FNPC']].map(([r,l])=>(
+              <button key={r} className="btn btn-outline btn-sm" style={{ justifyContent:'center', fontSize:12 }}
+                onClick={()=>{ const u={ id:`demo-${r}`, email:`demo-${r}@fnpc.fr`, nom:l, prenom:'Démo', role:r, dept:'75 - Paris Seine', antenne:'Paris 12ème' }; setAuthUser(u); setRole(r); setPage('dashboard'); sessionStorage.setItem('fnpc_user', JSON.stringify(u)); }}>
+                🔑 {l}
+              </button>
+            ))}
+          </div>
+        </details>
+      </div>
+    </div>
+  );
 
   return (
     <div style={{ fontFamily:"'Source Sans 3',sans-serif", background:'#F4F6FA', minHeight:'100vh', display:'flex', flexDirection:'column' }}>
@@ -2155,16 +2576,29 @@ export default function App() {
         </div>
         <div style={{ display:'flex', alignItems:'center', gap:8 }}>
           {USE_SUPABASE && <span style={{ background:dbConnected?'#d1fae5':'#fef9c3', color:dbConnected?'#059669':'#92400e', borderRadius:20, padding:'3px 9px', fontSize:12, fontWeight:700 }}>{dbConnected?'🟢 BD':'🟡 Démo'}</span>}
-          <span style={{ fontSize:11, color:'#94a3b8' }}>Vue :</span>
+          {/* Role selector: visible en démo ou pour gestion uniquement */}
+          {(!authUser?.id || authUser?.id?.startsWith('demo-') || role==='gestion') && <>
+            <span style={{ fontSize:11, color:'#94a3b8' }}>Vue :</span>
           <select value={role} onChange={e=>{ setRole(e.target.value); setPage('dashboard'); setFilterStatus('all'); setFilterDept('all'); setSearch(''); setSelectedBatch([]); }}
             style={{ background:'rgba(255,255,255,0.1)', color:'white', border:'1px solid rgba(255,255,255,0.2)', fontSize:12, padding:'5px 9px', borderRadius:6 }}>
-            <option value="antenne" style={{ background:'#1B3764' }}>👤 Président d'Antenne — Paris 12e</option>
-            <option value="departement" style={{ background:'#1B3764' }}>🏢 Président APC — APC 75</option>
+            <option value="antenne" style={{ background:'#1B3764' }}>👤 Antenne — Paris 12e</option>
+            <option value="departement" style={{ background:'#1B3764' }}>🏢 APC — Paris 75</option>
             <option value="commission" style={{ background:'#1B3764' }}>⚖️ Commission FNPC</option>
             <option value="gestion" style={{ background:'#1B3764' }}>🏛 Gestion FNPC</option>
           </select>
+          </>}
           {role!=='antenne' && (stats.delayedDept>0||stats.delayedComm>0) && <span onClick={alertInfo?.action} style={{ background:'#ef4444', color:'white', borderRadius:20, padding:'2px 8px', fontSize:11, fontWeight:800, cursor:'pointer' }} title="Demandes en retard">⏰ {role==='departement'?stats.delayedDept:stats.delayedComm}</span>}
-          <div style={{ width:34, height:34, borderRadius:'50%', background:'#E87722', display:'flex', alignItems:'center', justifyContent:'center', fontSize:13, color:'white', fontWeight:800 }}>{ROLES[role].label[0]}</div>
+          {/* User badge + logout */}
+          {authUser && <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+            <div style={{ textAlign:'right' }}>
+              <div style={{ fontSize:12, color:'white', fontWeight:700 }}>{authUser.prenom} {authUser.nom}</div>
+              <div style={{ fontSize:10, color:'#94a3b8' }}>{ROLES[role]?.label}</div>
+            </div>
+            <div style={{ width:34, height:34, borderRadius:'50%', background:'#E87722', display:'flex', alignItems:'center', justifyContent:'center', fontSize:13, color:'white', fontWeight:800, cursor:'pointer' }}
+              title="Se déconnecter" onClick={doLogout}>
+              {(authUser.prenom?.[0]||'?')}
+            </div>
+          </div>}
         </div>
       </header>
 
