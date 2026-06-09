@@ -32,6 +32,10 @@ const prestashop = {
     const d = await psCall('/customers?filter[email]=' + encodeURIComponent(email));
     return d?.customers?.[0] ?? null;
   },
+  async getCustomerById(id) {
+    const d = await psCall('/customers/' + id);
+    return d?.customer ?? null;
+  },
   async getCustomerAddresses(customerId) {
     const d = await psCall('/addresses?filter[id_customer]=' + customerId);
     return d?.addresses ?? [];
@@ -474,6 +478,8 @@ export default function App() {
   const [adrAdresse, setAdrAdresse] = useState('');
   const [adrCp, setAdrCp] = useState('');
   const [adrVille, setAdrVille] = useState('');
+  const [adrEmail, setAdrEmail] = useState('');
+  const [adrPsClientId, setAdrPsClientId] = useState('');
   const [impMode, setImpMode] = useState('template');
   const [impDept, setImpDept] = useState('all');
   const [csvPreview, setCsvPreview] = useState([]);
@@ -496,7 +502,8 @@ export default function App() {
   // PrestaShop state
   const [psProductId, setPsProductId] = useState(null);
   const [psLoading, setPsLoading] = useState(false);
-  const [psOrders, setPsOrders] = useState([]); // history of created orders
+  const [psOrders, setPsOrders] = useState([]);
+  const [psBypass, setPsBypass] = useState(false); // true = désactive la vérif PS (dépannage) // history of created orders
   const [newMedalShort, setNewMedalShort] = useState('');
   const [newMedalYears, setNewMedalYears] = useState('');
   const [newMedalColor, setNewMedalColor] = useState('#1B3764');
@@ -700,7 +707,8 @@ export default function App() {
 
     // ── Créer commande PrestaShop D'ABORD ─────────────────────────────────────
     // Le paiement n'est validé QUE si la commande PS est créée avec succès
-    if (!req.prestashopOrderId) {
+    // (sauf si psBypass est activé — mode dépannage)
+    if (!req.prestashopOrderId && !psBypass) {
       try {
         fire('Création commande PrestaShop…');
         let prodId = psProductId;
@@ -712,8 +720,14 @@ export default function App() {
 
         const apcAddr = deptAddresses[req.dept];
         const apcEmail = apcAddr?.email || CONNECTED_USERS['departement']?.email;
-        const customer = await prestashop.getCustomerByEmail(apcEmail);
-        if (!customer?.id) throw new Error(`Compte APC introuvable : ${apcEmail}`);
+        let customer;
+        if (apcAddr?.psClientId) {
+          customer = await prestashop.getCustomerById(apcAddr.psClientId);
+          if (!customer?.id) throw new Error(`Compte APC introuvable (ID PS: ${apcAddr.psClientId})`);
+        } else {
+          customer = await prestashop.getCustomerByEmail(apcEmail);
+          if (!customer?.id) throw new Error(`Compte APC introuvable : ${apcEmail} — configurez l'ID client PS dans les paramètres APC`);
+        }
 
         const addresses = await prestashop.getCustomerAddresses(customer.id);
         if (!addresses[0]?.id) throw new Error('Adresse APC introuvable dans PrestaShop');
@@ -732,8 +746,12 @@ export default function App() {
 
       } catch(e) {
         // BLOQUANT — on arrête ici, le paiement n'est pas validé
-        fire(`Paiement bloqué — Commande PrestaShop échouée : ${e.message}`, 'err');
-        setPsOrders(p=>[{ dept:req.dept, status:'error', msg:e.message }, ...p]);
+        let msg = e.message;
+        if (msg.includes('503')) msg = 'PrestaShop inaccessible (503) — vérifiez que le site boutique-preprod est en ligne. Utilisez le mode dépannage si besoin.';
+        if (msg.includes('404')) msg = 'Fonction Netlify introuvable (404) — vérifiez que le dossier netlify/functions/ est bien dans votre dépôt GitHub et déployé.';
+        if (msg.includes('Failed to fetch')) msg = 'Connexion impossible à la Netlify Function — vérifiez votre accès internet.';
+        fire(`Paiement bloqué — ${msg}`, 'err');
+        setPsOrders(p=>[{ dept:req.dept, status:'error', msg }, ...p]);
         return; // ← sortie anticipée, pas de validation paiement
       }
     }
@@ -1576,7 +1594,7 @@ export default function App() {
 
   function AdressePage() {
     const dept = ROLES[role]?.dept || '75 - Paris Seine';
-    const save = () => { setDeptAddresses(p=>({ ...p, [dept]:{ nom:adrNom, adresse:adrAdresse, cp:adrCp, ville:adrVille } })); fire('Adresse enregistrée ✓'); };
+    const save = () => { setDeptAddresses(p=>({ ...p, [dept]:{ nom:adrNom, adresse:adrAdresse, cp:adrCp, ville:adrVille, email:adrEmail, psClientId:adrPsClientId } })); fire('Adresse enregistrée ✓'); };
     return (
       <div style={{ maxWidth:600 }}>
         <h1 style={H1}>Adresse de réception APC</h1>
@@ -1588,6 +1606,16 @@ export default function App() {
           <div className="g2">
             <div className="fg"><label className="fl">Code postal</label><input className="input" placeholder="75000" value={adrCp} onChange={e=>setAdrCp(e.target.value)}/></div>
             <div className="fg"><label className="fl">Ville</label><input className="input" placeholder="Paris" value={adrVille} onChange={e=>setAdrVille(e.target.value)}/></div>
+          </div>
+          <div className="fg"><label className="fl">Email APC <span style={{ color:'#94a3b8', fontSize:11 }}>(utilisé pour la recherche PrestaShop si pas d'ID client)</span></label><input className="input" type="email" placeholder="apc.dept@protection-civile.org" value={adrEmail} onChange={e=>setAdrEmail(e.target.value)}/></div>
+          <div className="fg">
+            <label className="fl">
+              ID client PrestaShop{' '}
+              <span style={{ color:'#94a3b8', fontSize:11 }}>(recommandé — remplace la recherche par email)</span>
+            </label>
+            <input className="input" placeholder="Ex : 42" value={adrPsClientId} onChange={e=>setAdrPsClientId(e.target.value.replace(/\D/g,''))}/>
+            {adrPsClientId && <div style={{ fontSize:11, color:'#059669', marginTop:4 }}>✓ ID client #{adrPsClientId} — les commandes TDR utiliseront directement cet identifiant.</div>}
+            {!adrPsClientId && <div style={{ fontSize:11, color:'#f59e0b', marginTop:4 }}>⚠️ Sans ID client, la recherche se fait par email (moins fiable).</div>}
           </div>
           {adrNom && adrAdresse && adrCp && adrVille && (
             <div style={{ background:'#f0fdf4', border:'1px solid #86efac', borderRadius:8, padding:'9px 12px', marginBottom:12, fontSize:13, color:'#065f46' }}>
@@ -1604,9 +1632,9 @@ export default function App() {
               <div key={d} style={{ padding:'10px 0', borderBottom:'1px solid #f1f5f9', display:'flex', gap:10, alignItems:'center' }}>
                 <div style={{ flex:1 }}>
                   <div style={{ fontWeight:700, color:'#1B3764', fontSize:14 }}>{d}</div>
-                  <div style={{ fontSize:12, color:'#64748b', marginTop:2 }}>{a.nom}, {a.adresse}, {a.cp} {a.ville}</div>
+                  <div style={{ fontSize:12, color:'#64748b', marginTop:2 }}>{a.nom}, {a.adresse}, {a.cp} {a.ville}{a.email?` · ${a.email}`:''}{a.psClientId?<span style={{ color:'#059669', fontWeight:600 }}> · PS#{a.psClientId}</span>:<span style={{ color:'#f59e0b' }}> · ⚠️ Pas d'ID PS</span>}</div>
                 </div>
-                <button className="btn btn-outline btn-sm" onClick={()=>{ setAdrNom(a.nom); setAdrAdresse(a.adresse); setAdrCp(a.cp); setAdrVille(a.ville); }}>✏️ Modifier</button>
+                <button className="btn btn-outline btn-sm" onClick={()=>{ setAdrNom(a.nom); setAdrAdresse(a.adresse); setAdrCp(a.cp); setAdrVille(a.ville); setAdrEmail(a.email||''); setAdrPsClientId(a.psClientId||''); }}>✏️ Modifier</button>
                 <button className="btn btn-danger btn-sm" onClick={()=>{ setDeptAddresses(p=>{ const n={...p}; delete n[d]; return n; }); fire('Adresse supprimée ✓'); }}>✕</button>
               </div>
             ))}
@@ -2250,14 +2278,23 @@ export default function App() {
 
         const results = [];
         for (const [dept, reqs] of Object.entries(byDept)) {
-          // 2. Get APC customer by email
+          // 2. Get APC customer by psClientId (preferred) or email fallback
           const apcAddr = deptAddresses[dept];
           const apcEmail = apcAddr?.email || `apc.${dept.split(' ')[0].toLowerCase()}@protection-civile.org`;
           fire(`Recherche compte APC ${dept}...`);
-          const customer = await prestashop.getCustomerByEmail(apcEmail);
-          if (!customer?.id) {
-            results.push({ dept, status:'error', msg:`Compte APC introuvable pour ${apcEmail}` });
-            continue;
+          let customer;
+          if (apcAddr?.psClientId) {
+            customer = await prestashop.getCustomerById(apcAddr.psClientId);
+            if (!customer?.id) {
+              results.push({ dept, status:'error', msg:`Compte APC introuvable (ID PS: ${apcAddr.psClientId})` });
+              continue;
+            }
+          } else {
+            customer = await prestashop.getCustomerByEmail(apcEmail);
+            if (!customer?.id) {
+              results.push({ dept, status:'error', msg:`Compte APC introuvable pour ${apcEmail} — configurez l'ID client PS` });
+              continue;
+            }
           }
 
           // 3. Get address
@@ -2308,10 +2345,18 @@ export default function App() {
           Une commande = tous les TDR validés d'un département.
         </p>
 
-        {/* Bandeau connexion PS */}
         <div style={{ background:'#f0fdf4', border:'1px solid #86efac', borderRadius:10, padding:'10px 16px', marginBottom:16, fontSize:14, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
           <span>🛒 PrestaShop : <strong>boutique-preprod.protection-civile.org</strong> · Produit : <strong>DiplomeReco</strong></span>
           <span style={{ color:'#059669', fontWeight:700 }}>{psProductId ? `✓ Produit ID ${psProductId}` : '⏳ ID non chargé'}</span>
+        </div>
+        <div style={{ background: psBypass?'#fef9c3':'#f8faff', border:`1px solid ${psBypass?'#fbbf24':'#e5e7eb'}`, borderRadius:8, padding:'9px 14px', marginBottom:16, fontSize:13, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+          <span style={{ color: psBypass?'#92400e':'#64748b' }}>
+            {psBypass ? '⚠️ Mode dépannage activé — les paiements sont validés sans vérification PrestaShop' : '🔒 Mode normal — PrestaShop requis pour valider les paiements'}
+          </span>
+          <button className="btn btn-sm" style={{ background:psBypass?'#f59e0b':'#e5e7eb', color:psBypass?'white':'#374151' }}
+            onClick={()=>{ setPsBypass(p=>!p); fire(psBypass?'Mode normal rétabli':'⚠️ Mode dépannage activé'); }}>
+            {psBypass ? 'Désactiver le bypass' : '🔧 Mode dépannage'}
+          </button>
         </div>
 
         {/* TDR à commander */}
