@@ -4,7 +4,7 @@ import { db } from './supabase.js';
 // ─── CONSTANTS ─────────────────────────────────────────────────────────────────
 
 const APP_TITLE   = "Demande Médaille FNPC";
-const APP_VERSION = "1.0.1";
+const APP_VERSION = "1.0.0";
 const USE_SUPABASE = true;
 
 // ── PrestaShop Webservice ────────────────────────────────────────────────────
@@ -747,7 +747,7 @@ export default function App() {
       } catch(e) {
         // BLOQUANT — on arrête ici, le paiement n'est pas validé
         let msg = e.message;
-        if (msg.includes('503')) msg = 'PrestaShop inaccessible (503) — le site boutique-preprod est joignable depuis un navigateur ? Si oui, les IPs Netlify sont peut-être bloquées (WAF). Utilisez le mode dépannage ou contactez l\'admin PS.';
+        if (msg.includes('503')) msg = 'PrestaShop inaccessible (503) — vérifiez que le site boutique-preprod est en ligne. Utilisez le mode dépannage si besoin.';
         if (msg.includes('404')) msg = 'Fonction Netlify introuvable (404) — vérifiez que le dossier netlify/functions/ est bien dans votre dépôt GitHub et déployé.';
         if (msg.includes('Failed to fetch')) msg = 'Connexion impossible à la Netlify Function — vérifiez votre accès internet.';
         fire(`Paiement bloqué — ${msg}`, 'err');
@@ -2250,14 +2250,6 @@ export default function App() {
   }
 
   function PrestashopPage() {
-    // Auto-chargement de l'ID produit à l'ouverture de la page
-    React.useEffect(() => {
-      if (psProductId) return;
-      prestashop.getProductByRef('DiplomeReco').then(prod => {
-        if (prod?.id) setPsProductId(prod.id);
-      }).catch(() => {});
-    }, []);
-
     // TDR validated yesterday or before, not yet ordered
     const yesterday = new Date(); yesterday.setDate(yesterday.getDate()-1); yesterday.setHours(0,0,0,0);
     const toOrder = requests.filter(r =>
@@ -2355,22 +2347,7 @@ export default function App() {
 
         <div style={{ background:'#f0fdf4', border:'1px solid #86efac', borderRadius:10, padding:'10px 16px', marginBottom:16, fontSize:14, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
           <span>🛒 PrestaShop : <strong>boutique-preprod.protection-civile.org</strong> · Produit : <strong>DiplomeReco</strong></span>
-          <div style={{ display:'flex', gap:8, alignItems:'center' }}>
-            <span style={{ color:'#059669', fontWeight:700 }}>{psProductId ? `✓ Produit ID ${psProductId}` : '⏳ ID non chargé'}</span>
-            <button className="btn btn-sm btn-outline" style={{ fontSize:12 }} onClick={async ()=>{
-              fire('Test connexion PrestaShop…');
-              try {
-                const d = await psCall('/');
-                if (d) fire('✓ PrestaShop accessible — connexion OK');
-                else fire('⚠️ Réponse vide de PrestaShop', 'err');
-              } catch(e) {
-                let msg = e.message;
-                if (msg.includes('503')) msg = '503 — PrestaShop est inaccessible depuis Netlify. Vérifiez que le site est en ligne et que les IPs Netlify ne sont pas bloquées (WAF/Cloudflare).';
-                else if (msg.includes('404')) msg = '404 — Netlify Function introuvable. Vérifiez que netlify/functions/ est dans le repo GitHub.';
-                fire(msg, 'err');
-              }
-            }}>🔌 Tester</button>
-          </div>
+          <span style={{ color:'#059669', fontWeight:700 }}>{psProductId ? `✓ Produit ID ${psProductId}` : '⏳ ID non chargé'}</span>
         </div>
         <div style={{ background: psBypass?'#fef9c3':'#f8faff', border:`1px solid ${psBypass?'#fbbf24':'#e5e7eb'}`, borderRadius:8, padding:'9px 14px', marginBottom:16, fontSize:13, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
           <span style={{ color: psBypass?'#92400e':'#64748b' }}>
@@ -2633,7 +2610,7 @@ export default function App() {
       { id:'parametres', icon:'⚙️', label:'Paramètres' },
     ]:[]),
     ...(['antenne','departement','gestion'].includes(role)?[{ id:'delegues', icon:'👥', label:'Les Délégués' }]:[]),
-    ...(['departement','gestion'].includes(role)?[{ id:'adresse', icon:'⚙️', label:'Paramètres APC' }]:[]),
+    ...(['departement','gestion'].includes(role)?[{ id:'adresse', icon:'📬', label:role==='gestion'?'Adresses APC':'Adresse APC' }]:[]),
     { id:'mon_compte', icon:'👤', label:'Mon compte' },
   ];
 

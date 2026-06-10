@@ -3,6 +3,15 @@
   publish = "dist"
   functions = "netlify/functions"
 
+# Désactive la protection JWT sur la function proxy
+# (nécessaire pour que l'app puisse l'appeler via fetch)
+[[headers]]
+  for = "/.netlify/functions/*"
+  [headers.values]
+    Access-Control-Allow-Origin = "*"
+    Access-Control-Allow-Methods = "GET, POST, OPTIONS"
+    Access-Control-Allow-Headers = "Content-Type"
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
