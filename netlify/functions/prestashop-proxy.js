@@ -49,6 +49,8 @@ exports.handler = async (event) => {
         'Authorization': PS_AUTH,
         'Accept': 'application/json',
         'Output-Format': 'JSON',
+        // Certains WAF/hébergeurs rejettent les requêtes sans User-Agent navigateur.
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
         ...(xml ? { 'Content-Type': 'application/xml' } : {}),
       },
       ...(xml ? { body: xml } : {}),

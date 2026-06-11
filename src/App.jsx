@@ -41,9 +41,15 @@ const psCall = async (path, method = 'GET', xml = null) => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ path, method, xml }),
   });
-  if (!res.ok) throw new Error('Proxy HTTP ' + res.status);
-  const result = await res.json();
-  if (!result.ok) throw new Error('PrestaShop ' + result.status + ' — ' + JSON.stringify(result.data).slice(0, 120));
+  let result;
+  try { result = await res.json(); }
+  catch { throw new Error('Proxy HTTP ' + res.status + ' (réponse non-JSON du proxy)'); }
+  if (!res.ok || !result.ok) {
+    // On remonte le VRAI détail renvoyé en amont : soit du JSON PrestaShop
+    // ({"errors":[{"code":...}]}), soit une page HTML (WAF / Apache / 401 serveur).
+    const detail = typeof result.data === 'string' ? result.data : JSON.stringify(result.data ?? result);
+    throw new Error('PrestaShop ' + (result.status || res.status) + ' — ' + String(detail).slice(0, 220));
+  }
   return result.data;
 };
 
@@ -2474,12 +2480,19 @@ export default function App() {
             <button className="btn btn-sm btn-outline" style={{ fontSize:12 }} onClick={async ()=>{
               fire('Test connexion PrestaShop…');
               try {
-                const d = await psCall('/');
-                if (d) fire('✓ PrestaShop accessible — connexion OK');
+                // On interroge une ressource précise plutôt que la racine "/",
+                // car la liste racine en JSON déclenche un bug PHP 8 du cœur
+                // PrestaShop (array_filter sur une chaîne).
+                const d = await psCall('/products?filter[reference]=DiplomeReco');
+                const found = Array.isArray(d?.products) ? d.products.length : 0;
+                if (d) fire(found ? '✓ PrestaShop OK — produit DiplomeReco trouvé' : '✓ Connexion OK, mais produit DiplomeReco introuvable (vérifiez la référence)');
                 else fire('⚠️ Réponse vide de PrestaShop', 'err');
               } catch(e) {
                 let msg = e.message;
-                if (msg.includes('503')) msg = '503 — PrestaShop est inaccessible depuis Netlify. Vérifiez que le site est en ligne et que les IPs Netlify ne sont pas bloquées (WAF/Cloudflare).';
+                if (msg.includes('"code":22')) msg = 'Webservice désactivé côté PrestaShop (Paramètres avancés → Webservice).';
+                else if (msg.includes('"code":26')) msg = 'Clé API sans permission sur cette ressource — cochez products/customers/addresses/carts/orders pour la clé dans le Back Office.';
+                else if (msg.includes('401')) msg = '401 — clé API refusée. Vérifiez la clé et ses permissions dans le Back Office.';
+                else if (msg.includes('503')) msg = '503 — PrestaShop inaccessible depuis Netlify (site hors ligne ou IPs Netlify bloquées par un WAF/Cloudflare).';
                 else if (msg.includes('404')) msg = '404 — Netlify Function introuvable. Vérifiez que netlify/functions/ est dans le repo GitHub.';
                 fire(msg, 'err');
               }
