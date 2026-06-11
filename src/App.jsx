@@ -1,7 +1,31 @@
 import { useState, useMemo, useEffect, useRef } from "react";
+import React from "react";
 import { db } from './supabase.js';
+import { auth } from './auth.js';
 
-// ─── CONSTANTS ─────────────────────────────────────────────────────────────────
+// ─── ERROR BOUNDARY ───────────────────────────────────────────────────────────
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) { console.error('App crash:', error, info); }
+  render() {
+    if (this.state.error) return (
+      <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', minHeight:'100vh', padding:32, fontFamily:'system-ui,sans-serif' }}>
+        <div style={{ maxWidth:480, textAlign:'center' }}>
+          <div style={{ fontSize:48, marginBottom:16 }}>⚠️</div>
+          <h2 style={{ color:'#dc2626', marginBottom:8 }}>Une erreur inattendue s'est produite</h2>
+          <p style={{ color:'#64748b', marginBottom:20, fontSize:14 }}>{this.state.error.message}</p>
+          <button style={{ background:'#1B3764', color:'white', border:'none', borderRadius:8, padding:'10px 24px', cursor:'pointer', fontSize:14 }}
+            onClick={()=>{ this.setState({ error:null }); window.location.reload(); }}>
+            🔄 Recharger l'application
+          </button>
+        </div>
+      </div>
+    );
+    return this.props.children;
+  }
+}
+export { ErrorBoundary };
 
 const APP_TITLE   = "Demande Médaille FNPC";
 const APP_VERSION = "1.0.1";
@@ -331,55 +355,43 @@ const Logo = ({ size = 40 }) => <img src={LOGO_SRC} width={size} height={size} a
 export default function App() {
   // ── Auth : restaure la session depuis sessionStorage ─────────────────────
   useEffect(() => {
-    const saved = sessionStorage.getItem('fnpc_user');
-    if (saved) {
-      try {
-        const u = JSON.parse(saved);
-        setAuthUser(u);
-        setRole(u.role);
-      } catch { sessionStorage.removeItem('fnpc_user'); }
-    }
+    const u = auth.restoreSession();
+    if (u) { setAuthUser(u); setRole(u.role); }
   }, []);
 
   const doLogin = async () => {
     if (!loginEmail || !loginPassword) { setLoginError('Renseignez votre e-mail et mot de passe.'); return; }
     setLoginLoading(true); setLoginError('');
     try {
-      // Chercher l'utilisateur dans Supabase
-      const { data, error } = await db.supabase
-        .from('app_users')
-        .select('*')
-        .eq('email', loginEmail.toLowerCase().trim())
-        .eq('password', loginPassword)
-        .eq('actif', true)
-        .single();
-      if (error || !data) {
-        setLoginError('E-mail ou mot de passe incorrect, ou compte désactivé.');
-        setLoginLoading(false); return;
-      }
-      const u = { id:data.id, email:data.email, nom:data.nom, prenom:data.prenom, role:data.role, dept:data.dept, antenne:data.antenne };
-      setAuthUser(u);
-      setRole(u.role);
-      sessionStorage.setItem('fnpc_user', JSON.stringify(u));
-      setPage('dashboard');
+      const u = await auth.login(loginEmail, loginPassword);
+      setAuthUser(u); setRole(u.role); setPage('dashboard');
     } catch(e) {
-      setLoginError('Erreur de connexion : ' + e.message);
+      setLoginError(e.message);
     }
     setLoginLoading(false);
   };
 
   const doLogout = () => {
+    auth.logout();
     setAuthUser(null);
-    sessionStorage.removeItem('fnpc_user');
     setLoginEmail(''); setLoginPassword(''); setLoginError('');
     setPage('dashboard');
   };
   useEffect(() => {
     if (!USE_SUPABASE) { setDbLoading(false); return; }
+    const loadWithRetry = async (fn, maxRetries = 3) => {
+      for (let i = 0; i < maxRetries; i++) {
+        try { const r = await fn(); if (r !== null) return r; } catch(e) { if (i === maxRetries - 1) throw e; }
+        await new Promise(res => setTimeout(res, 1000 * (i + 1))); // backoff 1s, 2s, 3s
+      }
+      return null;
+    };
     (async () => {
       try {
         const [reqs, dels, agrs] = await Promise.all([
-          db.loadRequests(), db.loadDelegates(), db.loadAgrafes()
+          loadWithRetry(()=>db.loadRequests()),
+          loadWithRetry(()=>db.loadDelegates()),
+          loadWithRetry(()=>db.loadAgrafes()),
         ]);
         if (reqs !== null) { setRequests(reqs); setDbConnected(true); }
         if (dels !== null) setDelegates(dels);
@@ -390,6 +402,8 @@ export default function App() {
         if (welcome_cfg) setWelcomeMessages(welcome_cfg);
         const deptDisabled_cfg = await db.loadConfig('dept_disabled');
         if (deptDisabled_cfg) setDeptDisabled(deptDisabled_cfg);
+        const depts_cfg = await db.loadDepartments();
+        if (depts_cfg && Object.keys(depts_cfg).length > 0) setDeptAddresses(depts_cfg);
         setDbConnected(true);
       } catch(e) {
         console.warn('Supabase non disponible, mode démo', e.message);
@@ -465,6 +479,11 @@ export default function App() {
   ]);
   const [filterYear, setFilterYear] = useState('all');
   const [quickValConfirm, setQuickValConfirm] = useState(null);
+  // Modale de confirmation générique { title, message, onConfirm, danger }
+  const [confirmModal, setConfirmModal] = useState(null);
+  const confirm = (title, message, onConfirm, danger = true) => setConfirmModal({ title, message, onConfirm, danger });
+  const pageSize = 50;
+  const [pageOffset, setPageOffset] = useState(0);
 
   // ── State lifted from page components (fix focus bug) ──
   const [dlgNom, setDlgNom] = useState('');
@@ -502,6 +521,7 @@ export default function App() {
   // PrestaShop state
   const [psProductId, setPsProductId] = useState(null);
   const [psLoading, setPsLoading] = useState(false);
+  const [psStep, setPsStep] = useState(''); // étape en cours lors d'une action PS
   const [psOrders, setPsOrders] = useState([]);
   const [psBypass, setPsBypass] = useState(false); // true = désactive la vérif PS (dépannage) // history of created orders
   const [newMedalShort, setNewMedalShort] = useState('');
@@ -519,7 +539,29 @@ export default function App() {
     if (page === 'adresse') {
       const dept = ROLES[role]?.dept || '75 - Paris Seine';
       const d = deptAddresses[dept] || {};
-      setAdrNom(d.nom||''); setAdrAdresse(d.adresse||''); setAdrCp(d.cp||''); setAdrVille(d.ville||'');
+      setAdrNom(d.nom||''); setAdrAdresse(d.adresse||''); setAdrCp(d.cp||''); setAdrVille(d.ville||''); setAdrEmail(d.email||''); setAdrPsClientId(d.psClientId||'');
+    }
+    // Brouillon : auto-sauvegarde toutes les 30s sur la page nouvelle demande
+    if (page === 'nouvelle' && !editReqId) {
+      // Charger le brouillon cross-session (Supabase d'abord, sinon cache localStorage)
+      (async () => {
+        const cloud = await db.loadDraft(authUser?.email);
+        if (cloud) {
+          localStorage.setItem(DRAFT_KEY, JSON.stringify(cloud));
+          setDraftSavedAt(cloud.savedAt || null);
+        } else {
+          try { setDraftSavedAt(JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null')?.savedAt || null); }
+          catch { setDraftSavedAt(null); }
+        }
+      })();
+      const t = setInterval(autosaveDraft, 30000);
+      return () => clearInterval(t);
+    }
+    // Auto-chargement ID produit PrestaShop
+    if (page === 'prestashop' && !psProductId) {
+      prestashop.getProductByRef('DiplomeReco').then(prod => {
+        if (prod?.id) setPsProductId(prod.id);
+      }).catch(() => {});
     }
     // APC default: arrive on demandes with soumis filter (only if no explicit filter set)
     if (page === 'demandes' && role === 'departement' && filterStatus === 'all') {
@@ -565,6 +607,17 @@ export default function App() {
     if (!USE_SUPABASE || dbLoading || !dbConnected) return;
     db.saveConfig('dept_disabled', deptDisabled);
   }, [deptDisabled]);
+  useEffect(() => {
+    if (!USE_SUPABASE || dbLoading || !dbConnected) return;
+    // Sync chaque département modifié
+    Object.entries(deptAddresses).forEach(([code, data]) => db.upsertDepartment(code, data));
+  }, [deptAddresses]);
+
+  // ── Audit log helper ──────────────────────────────────────────────────────
+  const audit = (action, requestId = null, details = null) => {
+    if (!USE_SUPABASE || !dbConnected) return;
+    db.logAudit({ userEmail: authUser?.email || 'inconnu', userRole: role, action, requestId, details });
+  };
 
   // Nouvelle demande
   const [nrMode, setNrMode] = useState('registry');
@@ -608,6 +661,13 @@ export default function App() {
     return list;
   }, [allForRole, filterStatus, filterDept, filterYear, search]);
 
+  // Fenêtre paginée affichée dans la liste
+  const paginatedRequests = useMemo(() => visibleRequests.slice(pageOffset, pageOffset + pageSize), [visibleRequests, pageOffset, pageSize]);
+  const totalPages = Math.ceil(visibleRequests.length / pageSize);
+  const currentPage = Math.floor(pageOffset / pageSize) + 1;
+
+  useEffect(() => { setPageOffset(0); }, [filterStatus, filterDept, filterYear, search]);
+
   const myDeptRequests = requests.filter(r => r.dept === (lockedDept || '75 - Paris Seine'));
   const stats = {
     total: allForRole.length,
@@ -648,8 +708,8 @@ export default function App() {
   };
   const validateDept = id => {
     const req = getReq(id);
-    // APC validation: moves to "Prêt pour Commission" (batch hold, not sent yet)
     upd(id, { statut:'pret_commission', historique:[...req.historique,{ date:today(), action:'Validé par APC — en attente d\'envoi en masse à Commission FNPC', auteur:ROLES[role].label, comment:'' }] });
+    audit('valider_apc', id, { dept: req.dept, medal: req.medalType?.shortLabel });
     setSelected(null); fire('Demande validée — mise en attente d\'envoi en masse ✓');
   };
 
@@ -658,13 +718,13 @@ export default function App() {
     if (!batch.length) { fire('Aucune demande prête pour envoi en masse', 'err'); return; }
     batch.forEach(r => {
       upd(r.id, { statut:'en_commission', historique:[...r.historique,{ date:today(), action:`Transmis en Commission FNPC (envoi groupé de ${batch.length} dossiers)`, auteur:ROLES[role].label, comment:'' }] });
+      audit('envoyer_commission', r.id, { batch: batch.length, dept: r.dept });
     });
     fire(`${batch.length} dossier(s) transmis en masse à la Commission FNPC ✓`);
   };
   const validateComm = id => {
     const req = getReq(id);
     if (!req.medalType.payant) {
-      // Non-témoignage: auto-emit diploma immediately
       const counters = { ...diplomeCounters };
       const num = generateDiplomaNumber(req.dept, counters);
       counters[req.dept] = (counters[req.dept]||0) + 1;
@@ -673,11 +733,12 @@ export default function App() {
         { date:today(), action:'Approuvé par Commission FNPC', auteur:ROLES[role].label, comment:'Validation Commission FNPC.' },
         { date:today(), action:'Diplôme imprimé automatiquement', auteur:'Gestion FNPC', comment:`N° ${num}` }
       ]});
+      audit('valider_commission', id, { diplomeId: num, dept: req.dept, medal: req.medalType?.shortLabel });
       setSelected(null); fire(`Dossier approuvé — Diplôme ${num} imprimé automatiquement 🎖`);
       if (req.notifications) showEmail('diplome_emis', { ...req, diplomeId:num });
     } else {
-      // Témoignage: approve only, manual payment + emission required
       upd(id, { statut:'valide_federation', historique:[...req.historique,{ date:today(), action:'Approuvé par Commission FNPC', auteur:ROLES[role].label, comment:'En attente de paiement avant impression.' }] });
+      audit('valider_commission', id, { dept: req.dept, medal: req.medalType?.shortLabel, payant: true });
       setSelected(null); fire('Dossier approuvé — paiement requis avant impression du témoignage');
       if (req.notifications) showEmail('validation_commission', req);
     }
@@ -690,6 +751,7 @@ export default function App() {
     counters[req.dept] = (counters[req.dept]||0) + 1;
     setDiplomeCounters(counters);
     upd(id, { statut:'diplome_emis', diplomeId:num, historique:[...req.historique,{ date:today(), action:'Diplôme imprimé', auteur:ROLES[role].label, comment:`N° ${num}` }] });
+    audit('imprimer_diplome', id, { diplomeId: num, dept: req.dept, medal: req.medalType?.shortLabel });
     setSelected(null); fire(`Diplôme ${num} imprimé 🎖`);
     if (req.notifications) showEmail('diplome_emis', { ...req, diplomeId:num });
   };
@@ -698,6 +760,7 @@ export default function App() {
       const req = getReq(id);
       upd(id, { statut:'expedie', expedition:today(), historique:[...req.historique,{ date:today(), action:'Expédié', auteur:'Gestion FNPC', comment:'Expédié par courrier recommandé.' }] });
       if (req.notifications) showEmail('expedition', req);
+      audit('expedier', id, { dept: req.dept, medal: req.medalType?.shortLabel });
     });
     setSelectedBatch([]);
     fire(`${ids.length} diplôme(s) marqué(s) expédié(s) ✓`);
@@ -779,6 +842,7 @@ export default function App() {
     const statut = role==='departement'?'refuse_dept':'refuse_federation';
     const action = role==='departement'?'Refusé par APC':'Refusé par Commission FNPC';
     upd(id, { statut, historique:[...req.historique,{ date:today(), action, auteur:ROLES[role].label, comment }] });
+    audit('refuser', id, { statut, dept: req.dept, medal: req.medalType?.shortLabel, motif: comment });
     setRefuseModal(null); setRefuseComment(''); setSelected(null);
     fire('Demande refusée','err');
     if (req.notifications) showEmail(role==='departement'?'refus_apc':'refus_apc', { ...req, _motif:comment });
@@ -821,7 +885,35 @@ export default function App() {
     return { id:'MANUAL', nom:nrNom.toUpperCase(), prenom:nrPrenom, genre:nrGenre, annee:parseInt(nrAnnee)||null, antenne:null, dept:lockedDept||nrDept, adhesion:nrAdhesion, ans, fonctions:nrFonctions, distinctions:nrDistinctions };
   };
 
-  const resetForm = () => { setNrVol(null); setNrVolSearch(''); setNrMedal(''); setNrJust(''); setNrFonctions(''); setNrDistinctions(''); setNrDateRecep(''); setNrEmail(''); setNrNotif(true); setNrCommentaire(''); setNrDept(''); setNrDemandeur(''); setNrNom(''); setNrPrenom(''); setNrAdhesion(''); setNrAgrafe(false); setNrAgrafeDepts([]); setEditReqId(null); };
+  const DRAFT_KEY = 'fnpc_draft_demande';
+  const [draftSavedAt, setDraftSavedAt] = useState(null); // horodatage du brouillon courant (pilote le bandeau)
+  const autosaveDraft = () => {
+    if (!nrNom && !nrPrenom && !nrMedal) return; // Ne pas sauver un brouillon vide
+    const payload = { nrNom, nrPrenom, nrAdhesion, nrGenre, nrAnnee, nrMedal, nrJust, nrFonctions, nrDistinctions, nrDateRecep, nrEmail, nrNotif, nrCommentaire, nrDept, nrDemandeur, nrAgrafe, nrAgrafeDepts, savedAt: new Date().toISOString() };
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(payload));
+    setDraftSavedAt(payload.savedAt);
+    db.saveDraft(authUser?.email, payload); // synchro cross-session (Supabase)
+  };
+  const restoreDraft = () => {
+    try {
+      const d = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null');
+      if (!d) return false;
+      if (d.nrNom) setNrNom(d.nrNom); if (d.nrPrenom) setNrPrenom(d.nrPrenom);
+      if (d.nrAdhesion) setNrAdhesion(d.nrAdhesion); if (d.nrGenre) setNrGenre(d.nrGenre);
+      if (d.nrAnnee) setNrAnnee(d.nrAnnee); if (d.nrMedal) setNrMedal(d.nrMedal);
+      if (d.nrJust) setNrJust(d.nrJust); if (d.nrFonctions) setNrFonctions(d.nrFonctions);
+      if (d.nrDistinctions) setNrDistinctions(d.nrDistinctions); if (d.nrDateRecep) setNrDateRecep(d.nrDateRecep);
+      if (d.nrEmail) setNrEmail(d.nrEmail); setNrNotif(d.nrNotif ?? true);
+      if (d.nrCommentaire) setNrCommentaire(d.nrCommentaire); if (d.nrDept) setNrDept(d.nrDept);
+      if (d.nrDemandeur) setNrDemandeur(d.nrDemandeur); setNrAgrafe(d.nrAgrafe ?? false);
+      if (d.nrAgrafeDepts) setNrAgrafeDepts(d.nrAgrafeDepts);
+      return d.savedAt;
+    } catch { return false; }
+  };
+  const clearDraft = () => { localStorage.removeItem(DRAFT_KEY); setDraftSavedAt(null); db.clearDraft(authUser?.email); };
+  const hasDraft = () => !!localStorage.getItem(DRAFT_KEY);
+
+  const resetForm = () => { clearDraft(); setNrVol(null); setNrVolSearch(''); setNrMedal(''); setNrJust(''); setNrFonctions(''); setNrDistinctions(''); setNrDateRecep(''); setNrEmail(''); setNrNotif(true); setNrCommentaire(''); setNrDept(''); setNrDemandeur(''); setNrNom(''); setNrPrenom(''); setNrAdhesion(''); setNrAgrafe(false); setNrAgrafeDepts([]); setEditReqId(null); };
 
   const loadBrouillon = (req) => {
     if (req.statut !== 'brouillon') return;
@@ -1007,7 +1099,7 @@ export default function App() {
               <div style={{ fontWeight:700, color:'#0369a1', fontSize:15 }}>📦 {stats.pretCommission} dossier(s) prêt(s) pour envoi groupé en Commission FNPC</div>
               <div style={{ fontSize:13, color:'#0284c7', marginTop:2 }}>Les dossiers validés s'accumulent ici. Envoyez-les en masse quand vous êtes prêt.</div>
             </div>
-            <button className="btn btn-sm" style={{ background:'#0ea5e9', color:'white', flexShrink:0 }} onClick={sendBatchToCommission}>
+            <button className="btn btn-sm" style={{ background:'#0ea5e9', color:'white', flexShrink:0 }} onClick={()=>{ const n=requests.filter(r=>r.statut==='pret_commission'&&r.dept===(lockedDept||'75 - Paris Seine')).length; confirm(`Envoyer ${n} dossier(s) en Commission`, `Transmettre ${n} dossier(s) à la Commission FNPC ? Cette action est définitive.`, sendBatchToCommission, false); }}>
               📨 Envoyer en masse ({stats.pretCommission})
             </button>
           </div>
@@ -1225,14 +1317,23 @@ export default function App() {
               <option value="all">Toutes années</option>
               {years.map(y=><option key={y} value={y}>{y}</option>)}
             </select>
-            <span style={{ color:'#94a3b8', fontSize:12, marginLeft:'auto' }}>{visibleRequests.length} résultat(s)</span>
+            <span style={{ color:'#94a3b8', fontSize:12, marginLeft:'auto' }}>{visibleRequests.length} résultat(s){totalPages > 1 ? ` — page ${currentPage}/${totalPages}` : ''}</span>
           </div>
         </div>
         <div className="card">
           <ReqHeader />
           {visibleRequests.length===0 ? <div style={{ textAlign:'center', padding:'36px', color:'#94a3b8' }}>📭 Aucune demande</div>
-            : visibleRequests.map(req=><ReqRow key={req.id} req={req} onSelect={setSelected} showLate={role!=='antenne'}/>)}
+            : paginatedRequests.map(req=><ReqRow key={req.id} req={req} onSelect={setSelected} showLate={role!=='antenne'}/>)}
         </div>
+        {totalPages > 1 && (
+          <div style={{ display:'flex', justifyContent:'center', alignItems:'center', gap:8, marginTop:12 }}>
+            <button className="btn btn-outline btn-sm" disabled={pageOffset===0} onClick={()=>setPageOffset(0)}>«</button>
+            <button className="btn btn-outline btn-sm" disabled={pageOffset===0} onClick={()=>setPageOffset(p=>Math.max(0,p-pageSize))}>‹ Préc.</button>
+            <span style={{ fontSize:13, color:'#64748b' }}>Page {currentPage} / {totalPages}</span>
+            <button className="btn btn-outline btn-sm" disabled={currentPage>=totalPages} onClick={()=>setPageOffset(p=>p+pageSize)}>Suiv. ›</button>
+            <button className="btn btn-outline btn-sm" disabled={currentPage>=totalPages} onClick={()=>setPageOffset((totalPages-1)*pageSize)}>»</button>
+          </div>
+        )}
       </div>
     );
   }
@@ -1308,6 +1409,7 @@ export default function App() {
   function NouvelleDemandePage() {
     const vol = effectiveVol;
     const suggestion = vol ? getNextMedalSuggestion(vol, medalTypes) : null;
+    const draftDate = !editReqId ? draftSavedAt : null;
     return (
       <div style={{ maxWidth:680 }}>
         <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:20 }}>
@@ -1315,6 +1417,17 @@ export default function App() {
           <h1 style={H1}>{editReqId ? '✏️ Modifier la demande' : 'Nouvelle demande de distinction'}</h1>
           {editReqId && <span style={{ background:'#FFF4E8', border:'1px solid #E87722', borderRadius:20, padding:'2px 10px', fontSize:12, color:'#C45A00', fontWeight:700 }}>Modification · {editReqId}</span>}
         </div>
+
+        {/* Bandeau brouillon */}
+        {draftDate && !nrMedal && (
+          <div style={{ background:'#fffbeb', border:'1px solid #fcd34d', borderRadius:8, padding:'10px 14px', marginBottom:12, display:'flex', justifyContent:'space-between', alignItems:'center', fontSize:13 }}>
+            <span>📝 Un brouillon a été sauvegardé le {new Date(draftDate).toLocaleString('fr-FR')}.</span>
+            <div style={{ display:'flex', gap:8 }}>
+              <button className="btn btn-sm btn-outline" onClick={()=>{ restoreDraft(); fire('Brouillon restauré ✓'); }}>Restaurer</button>
+              <button className="btn btn-sm btn-outline" style={{ color:'#dc2626' }} onClick={()=>{ clearDraft(); fire('Brouillon supprimé'); }}>Ignorer</button>
+            </div>
+          </div>
+        )}
 
         {/* 1 Identification — SSO non modifiable */}
         <div className="card" style={{ marginBottom:12 }}>
@@ -1671,7 +1784,7 @@ export default function App() {
           <div><h1 style={H1}>Diplômes</h1><p style={{ color:'#64748b', fontSize:13, marginTop:2 }}>{emis.length} diplôme(s) imprimés · {tdrEnAttente.length>0?`${tdrEnAttente.length} témoignage(s) en attente de paiement ·`:''} en attente d'expédition</p></div>
           <div style={{ display:'flex', gap:8 }}>
             {selectedBatch.length>0&&<button className="btn btn-primary btn-sm" onClick={()=>{ const first=emis.find(r=>selectedBatch.includes(r.id)); if(first) setDiplomaView({ ...first, _printMode:'template' }); }}>📄 Imprimer Template ({selectedBatch.length})</button>}
-            {selectedBatch.length>0&&<button className="btn btn-sm" style={{ background:'#7c3aed', color:'white' }} onClick={()=>markExpedited(selectedBatch)}>📬 Marquer Expédié ({selectedBatch.length})</button>}
+            {selectedBatch.length>0&&<button className="btn btn-sm" style={{ background:'#7c3aed', color:'white' }} onClick={()=>confirm(`Expédier ${selectedBatch.length} diplôme(s)`, `Marquer ${selectedBatch.length} diplôme(s) sélectionné(s) comme expédié(s) ? Cette action est irréversible.`, ()=>markExpedited(selectedBatch))}>📬 Marquer Expédié ({selectedBatch.length})</button>}
           </div>
         </div>
 
@@ -1721,7 +1834,7 @@ export default function App() {
                 </div>
                 {hasPendingTDR && <button className="btn btn-sm" style={{ background:'#fbbf24', color:'#78350f', flexShrink:0 }} onClick={e=>{e.stopPropagation();markPaidByDept(deptReqs);}}>💳 TDR APC</button>}
                 <button className="btn btn-sm" style={{ background:'#1e40af', color:'white', flexShrink:0 }} onClick={e=>{ e.stopPropagation(); const printable=deptReqs.filter(r=>!r.medalType.payant||r.paiement==='paye'); if(printable.length) setDiplomaView({ ...printable[0], _printMode:'template', _batch:printable.map(r=>r.id) }); else fire('Aucun diplôme imprimable (TDR non payés)','err'); }}>📄 Imprimer Template</button>
-                <button className="btn btn-sm" style={{ background:'#7c3aed', color:'white', flexShrink:0 }} onClick={e=>{e.stopPropagation();markExpedited(deptReqs.filter(r=>!r.medalType.payant||r.paiement==='paye').map(r=>r.id));}}>📬 Tout Marquer Expédié</button>
+                <button className="btn btn-sm" style={{ background:'#7c3aed', color:'white', flexShrink:0 }} onClick={e=>{e.stopPropagation(); const ids=deptReqs.filter(r=>!r.medalType.payant||r.paiement==='paye').map(r=>r.id); confirm(`Expédier ${ids.length} diplôme(s)`, `Marquer tous les diplômes du département comme expédiés ? Cette action est irréversible.`, ()=>markExpedited(ids));}}>📬 Tout Marquer Expédié</button>
               </div>
               {deptReqs.map(req=>{
                 const unpaid = req.medalType.payant && req.paiement !== 'paye';
@@ -2250,18 +2363,10 @@ export default function App() {
   }
 
   function PrestashopPage() {
-    // Auto-chargement de l'ID produit à l'ouverture de la page
-    React.useEffect(() => {
-      if (psProductId) return;
-      prestashop.getProductByRef('DiplomeReco').then(prod => {
-        if (prod?.id) setPsProductId(prod.id);
-      }).catch(() => {});
-    }, []);
-
     // TDR validated yesterday or before, not yet ordered
     const yesterday = new Date(); yesterday.setDate(yesterday.getDate()-1); yesterday.setHours(0,0,0,0);
     const toOrder = requests.filter(r =>
-      r.statut === 'valide_federation' && r.medalType.payant && !r.prestashopOrderId
+      r.statut === 'valide_federation' && r.medalType?.payant && !r.prestashopOrderId
     );
     // Group by dept
     const byDept = toOrder.reduce((acc, r) => {
@@ -2272,12 +2377,12 @@ export default function App() {
 
     const createOrders = async () => {
       if (!Object.keys(byDept).length) { fire('Aucune commande à créer', 'err'); return; }
-      setPsLoading(true);
+      setPsLoading(true); setPsStep('');
       try {
         // 1. Get product ID once
         let productId = psProductId;
         if (!productId) {
-          fire('Recherche produit DiplomeReco dans PrestaShop...');
+          setPsStep('🔍 Recherche du produit DiplomeReco…');
           const prod = await prestashop.getProductByRef('DiplomeReco');
           if (!prod?.id) throw new Error('Produit DiplomeReco introuvable dans PrestaShop');
           productId = prod.id;
@@ -2290,6 +2395,7 @@ export default function App() {
           const apcAddr = deptAddresses[dept];
           const apcEmail = apcAddr?.email || `apc.${dept.split(' ')[0].toLowerCase()}@protection-civile.org`;
           fire(`Recherche compte APC ${dept}...`);
+          setPsStep(`👤 [${dept}] Recherche du compte APC…`);
           let customer;
           if (apcAddr?.psClientId) {
             customer = await prestashop.getCustomerById(apcAddr.psClientId);
@@ -2314,6 +2420,7 @@ export default function App() {
           }
 
           // 4. Create cart
+          setPsStep(`🛒 [${dept}] Création du panier…`);
           const cart = await prestashop.createCart(customer.id, addrId);
           if (!cart?.id) {
             results.push({ dept, status:'error', msg:'Erreur création panier' });
@@ -2322,6 +2429,7 @@ export default function App() {
 
           // 5. Create order (qty = nb TDR du département)
           const ref = `FNPC-TDR-${dept.split(' ')[0]}-${today()}`;
+          setPsStep(`📋 [${dept}] Création de la commande (${reqs.length} TDR)…`);
           const order = await prestashop.createOrder(customer.id, cart.id, addrId, productId, reqs.length, ref);
           if (!order?.id) {
             results.push({ dept, status:'error', msg:'Erreur création commande' });
@@ -2329,15 +2437,20 @@ export default function App() {
           }
 
           // 6. Mark requests as ordered
-          reqs.forEach(r => upd(r.id, { prestashopOrderId: order.id, paiement:'commande_creee' }));
+          reqs.forEach(r => {
+            upd(r.id, { prestashopOrderId: order.id, paiement:'commande_creee' });
+            audit('commande_ps_creee', r.id, { orderId: order.id, dept, ref });
+          });
           results.push({ dept, status:'ok', orderId:order.id, qty:reqs.length, ref });
         }
 
         setPsOrders(p => [...results, ...p]);
         const ok = results.filter(r=>r.status==='ok').length;
         const err = results.filter(r=>r.status==='error').length;
+        setPsStep('');
         fire(`${ok} commande(s) créée(s)${err>0?` · ${err} erreur(s)`:''}${err===0?' ✓':''}`);
       } catch(e) {
+        setPsStep('');
         fire(`Erreur PrestaShop : ${e.message}`, 'err');
         console.error('PrestaShop error:', e);
       } finally {
@@ -2402,11 +2515,17 @@ export default function App() {
                 className="btn btn-orange"
                 style={{ opacity: psLoading?0.6:1 }}
                 disabled={psLoading}
-                onClick={createOrders}
+                onClick={()=>confirm('Créer les commandes PrestaShop', `Créer ${Object.keys(byDept).length} commande(s) groupée(s) pour les TDR en attente ? Cette action crée des commandes réelles dans PrestaShop.`, createOrders, false)}
               >
                 {psLoading ? '⏳ Création en cours…' : '🛒 Créer les commandes groupées'}
               </button>
             </div>
+            {psLoading && psStep && (
+              <div style={{ background:'#f0f9ff', border:'1px solid #bae6fd', borderRadius:8, padding:'10px 14px', marginTop:10, display:'flex', alignItems:'center', gap:10, fontSize:13, color:'#0369a1' }}>
+                <span style={{ animation:'spin 1s linear infinite', display:'inline-block' }}>⏳</span>
+                <span>{psStep}</span>
+              </div>
+            )}
 
             {Object.entries(byDept).map(([dept, reqs]) => (
               <div key={dept} className="card" style={{ marginBottom:8, borderLeft:'4px solid #E87722' }}>
@@ -2414,7 +2533,7 @@ export default function App() {
                   <div>
                     <div style={{ fontWeight:700, color:'#1B3764', fontSize:15 }}>{dept}</div>
                     <div style={{ fontSize:13, color:'#64748b', marginTop:2 }}>
-                      {reqs.length} TDR · {reqs.map(r=>`${r.benevole.prenom} ${r.benevole.nom}`).join(', ')}
+                      {reqs.length} TDR · {reqs.map(r=>`${r.benevole?.prenom||''} ${r.benevole?.nom||''}`.trim()).join(', ')}
                     </div>
                   </div>
                   <div style={{ textAlign:'right' }}>
@@ -2673,7 +2792,7 @@ export default function App() {
           <div style={{ marginTop:10, display:'flex', flexDirection:'column', gap:6 }}>
             {[['antenne','Antenne Paris 12e'],['departement','APC 75 - Paris Seine'],['commission','Commission FNPC'],['gestion','Gestion FNPC']].map(([r,l])=>(
               <button key={r} className="btn btn-outline btn-sm" style={{ justifyContent:'center', fontSize:12 }}
-                onClick={()=>{ const u={ id:`demo-${r}`, email:`demo-${r}@fnpc.fr`, nom:l, prenom:'Démo', role:r, dept:'75 - Paris Seine', antenne:'Paris 12ème' }; setAuthUser(u); setRole(r); setPage('dashboard'); sessionStorage.setItem('fnpc_user', JSON.stringify(u)); }}>
+                onClick={()=>{ const u={ id:`demo-${r}`, email:`demo-${r}@fnpc.fr`, nom:l, prenom:'Démo', role:r, dept:'75 - Paris Seine', antenne:'Paris 12ème' }; setAuthUser(u); setRole(r); setPage('dashboard'); auth.saveSession(u); }}>
                 🔑 {l}
               </button>
             ))}
@@ -2845,8 +2964,22 @@ export default function App() {
               {canRefuse(selected)&&<button className="btn btn-danger btn-sm" onClick={()=>{ setRefuseModal(selected); setSelected(null); }}>✗ Refuser</button>}
               {canValAntenne(selected)&&<button className="btn btn-success btn-sm" onClick={()=>validateAntenne(selected.id)}>✓ Valider → APC</button>}
               {canValDept(selected)&&<button className="btn btn-success btn-sm" onClick={()=>validateDept(selected.id)}>✓ Valider APC</button>}
-              {canValComm(selected)&&<button className="btn btn-success btn-sm" onClick={()=>validateComm(selected.id)}>✓ Approuver Commission</button>}
-              {canIssue(selected)&&<button className="btn btn-orange btn-sm" onClick={()=>issueDiploma(selected.id)}>🖨 Imprimer le diplôme</button>}
+              {canValComm(selected)&&<button className="btn btn-success btn-sm" onClick={()=>confirm('Approuver la demande', `Approuver la demande de ${selected.benevole.prenom} ${selected.benevole.nom} (${selected.medalType.shortLabel}) ?`, ()=>validateComm(selected.id), false)}>✓ Approuver Commission</button>}
+              {canIssue(selected)&&<button className="btn btn-orange btn-sm" onClick={()=>confirm('Imprimer le diplôme', `Imprimer le diplôme de ${selected.benevole.prenom} ${selected.benevole.nom} ? Un numéro définitif sera attribué.`, ()=>issueDiploma(selected.id), false)}>🖨 Imprimer le diplôme</button>}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODALE CONFIRMATION GÉNÉRIQUE */}
+      {confirmModal&&(
+        <div className="modal-overlay" onClick={()=>setConfirmModal(null)}>
+          <div className="modal" style={{ maxWidth:420 }} onClick={e=>e.stopPropagation()}>
+            <h2 style={{ fontFamily:'Playfair Display,serif', color: confirmModal.danger ? '#dc2626' : '#1B3764', marginBottom:8 }}>{confirmModal.title}</h2>
+            <p style={{ color:'#64748b', fontSize:14, marginBottom:20, lineHeight:1.5 }}>{confirmModal.message}</p>
+            <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+              <button className="btn btn-outline btn-sm" onClick={()=>setConfirmModal(null)}>Annuler</button>
+              <button className={`btn btn-sm ${confirmModal.danger ? 'btn-danger' : 'btn-primary'}`} onClick={()=>{ confirmModal.onConfirm(); setConfirmModal(null); }}>Confirmer</button>
             </div>
           </div>
         </div>

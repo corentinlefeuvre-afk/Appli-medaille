@@ -1,9 +1,12 @@
 // netlify/functions/prestashop-proxy.js
 // Proxy serverless pour les appels PrestaShop
 // Tourne côté serveur Netlify → pas de CORS
+// Variables à configurer dans Netlify → Site settings → Environment variables :
+//   PS_URL = https://boutique-preprod.protection-civile.org/api
+//   PS_KEY = 5EPPRQ2EFSRG8Z3DF1PT2YF8MVWGDY1M
 
-const PS_URL  = 'https://boutique-preprod.protection-civile.org/api';
-const PS_KEY  = '5EPPRQ2EFSRG8Z3DF1PT2YF8MVWGDY1M';
+const PS_URL  = process.env.PS_URL  || 'https://boutique-preprod.protection-civile.org/api';
+const PS_KEY  = process.env.PS_KEY  || '5EPPRQ2EFSRG8Z3DF1PT2YF8MVWGDY1M';
 const PS_AUTH = 'Basic ' + Buffer.from(PS_KEY + ':').toString('base64');
 
 // Timeout en ms pour éviter qu'une PS lente bloque indéfiniment

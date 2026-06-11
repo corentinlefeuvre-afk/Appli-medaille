@@ -47,3 +47,27 @@ CREATE POLICY "allow_all_test" ON app_config FOR ALL USING (true);
 -- pour la phase de test. En production, remplacer par des
 -- politiques basées sur le JWT du SSO.
 -- ============================================================
+
+-- ─── TABLE : app_departments ─────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS app_departments (
+  dept_code  TEXT PRIMARY KEY,           -- ex: '75 - Paris Seine'
+  data       JSONB NOT NULL,             -- { nom, adresse, cp, ville, email, psClientId }
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE app_departments ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "public_read_write" ON app_departments FOR ALL USING (true);
+
+-- ─── TABLE : app_audit_log ───────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS app_audit_log (
+  id          BIGSERIAL PRIMARY KEY,
+  user_email  TEXT,
+  user_role   TEXT,
+  action      TEXT NOT NULL,             -- ex: 'valider', 'refuser', 'expedier', 'imprimer'
+  request_id  TEXT,                      -- FK logique vers app_requests.id
+  details     JSONB,                     -- contexte libre (ancien statut, nouveau statut, etc.)
+  created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE app_audit_log ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "public_read_write" ON app_audit_log FOR ALL USING (true);
+CREATE INDEX IF NOT EXISTS idx_audit_request_id ON app_audit_log(request_id);
+CREATE INDEX IF NOT EXISTS idx_audit_created_at ON app_audit_log(created_at DESC);

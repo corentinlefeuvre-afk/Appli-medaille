@@ -1,8 +1,10 @@
 import { createClient } from '@supabase/supabase-js'
 
 // Clé publique uniquement (anon key) — ne jamais mettre la clé secrète ici
-const SUPABASE_URL = 'https://bectezvnxlzwahbwlizf.supabase.co'
-const SUPABASE_ANON_KEY = 'sb_publishable_wQ6UUNhMZI3D1yk_G-FJEw_F6Er5-6y'
+// Les valeurs sont lues depuis .env (VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY)
+// À configurer aussi dans Netlify → Site settings → Environment variables
+const SUPABASE_URL      = import.meta.env.VITE_SUPABASE_URL      || 'https://bectezvnxlzwahbwlizf.supabase.co'
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_wQ6UUNhMZI3D1yk_G-FJEw_F6Er5-6y'
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
 
@@ -119,8 +121,10 @@ export const db = {
 
   // CONFIG (tarif, welcome messages, dept disabled)
   async loadConfig(key) {
-    const { data, error } = await supabase.from('app_config').select('value').eq('key', key).single()
-    if (error) return null
+    // maybeSingle() renvoie null proprement (HTTP 200) quand la ligne n'existe
+    // pas, au lieu d'un 406 bruyant en console avec single().
+    const { data, error } = await supabase.from('app_config').select('value').eq('key', key).maybeSingle()
+    if (error) { console.error('Supabase load config:', error.message); return null }
     return data?.value
   },
 
@@ -131,5 +135,68 @@ export const db = {
       updated_at: new Date().toISOString()
     })
     if (error) console.error('Supabase save config:', error.message)
-  }
+  },
+
+  // DÉPARTEMENTS (adresse, email, ID PS)
+  async loadDepartments() {
+    const { data, error } = await supabase.from('app_departments').select('*')
+    if (error) { console.error('Supabase load departments:', error.message); return null }
+    return Object.fromEntries(data.map(r => [r.dept_code, r.data]))
+  },
+
+  async upsertDepartment(deptCode, data) {
+    const { error } = await supabase.from('app_departments').upsert({
+      dept_code: deptCode,
+      data,
+      updated_at: new Date().toISOString()
+    })
+    if (error) console.error('Supabase upsert department:', error.message)
+  },
+
+  // AUDIT LOG
+  async logAudit(entry) {
+    const { error } = await supabase.from('app_audit_log').insert({
+      user_email: entry.userEmail,
+      user_role:  entry.userRole,
+      action:     entry.action,
+      request_id: entry.requestId || null,
+      details:    entry.details   || null,
+      created_at: new Date().toISOString()
+    })
+    if (error) console.error('Supabase audit log:', error.message)
+  },
+
+  async loadAuditLog(requestId = null, limit = 100) {
+    let q = supabase.from('app_audit_log').select('*').order('created_at', { ascending: false }).limit(limit)
+    if (requestId) q = q.eq('request_id', requestId)
+    const { data, error } = await q
+    if (error) { console.error('Supabase load audit:', error.message); return [] }
+    return data
+  },
+
+  // BROUILLON CROSS-SESSION
+  // Stocké dans app_config sous la clé `draft:<email>` (pas de table dédiée à créer).
+  // Permet de retrouver le brouillon en cours sur n'importe quelle session/appareil.
+  async saveDraft(email, data) {
+    if (!email) return
+    const { error } = await supabase.from('app_config').upsert({
+      key: `draft:${email}`,
+      value: data,
+      updated_at: new Date().toISOString()
+    })
+    if (error) console.error('Supabase save draft:', error.message)
+  },
+
+  async loadDraft(email) {
+    if (!email) return null
+    const { data, error } = await supabase.from('app_config').select('value').eq('key', `draft:${email}`).maybeSingle()
+    if (error) { console.error('Supabase load draft:', error.message); return null }
+    return data?.value || null
+  },
+
+  async clearDraft(email) {
+    if (!email) return
+    const { error } = await supabase.from('app_config').delete().eq('key', `draft:${email}`)
+    if (error) console.error('Supabase clear draft:', error.message)
+  },
 }

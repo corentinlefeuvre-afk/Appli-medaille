@@ -1,12 +1,14 @@
 {
   "name": "fnpc-medailles",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Application de gestion des distinctions et médailles FNPC",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "bump:patch": "npm version patch --no-git-tag-version && node -e \"const f=require('fs');const p=JSON.parse(f.readFileSync('package.json','utf8'));const a=f.readFileSync('src/App.jsx','utf8').replace(/const APP_VERSION = \\\"[^\\\"]+\\\"/,'const APP_VERSION = \\\"'+p.version+'\\\"');f.writeFileSync('src/App.jsx',a);console.log('Version bumped to',p.version);\"",
+    "bump:minor": "npm version minor --no-git-tag-version && node -e \"const f=require('fs');const p=JSON.parse(f.readFileSync('package.json','utf8'));const a=f.readFileSync('src/App.jsx','utf8').replace(/const APP_VERSION = \\\"[^\\\"]+\\\"/,'const APP_VERSION = \\\"'+p.version+'\\\"');f.writeFileSync('src/App.jsx',a);console.log('Version bumped to',p.version);\""
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.107.0",
