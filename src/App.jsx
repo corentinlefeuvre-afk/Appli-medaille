@@ -28,7 +28,7 @@ class ErrorBoundary extends React.Component {
 export { ErrorBoundary };
 
 const APP_TITLE   = "Demande Médaille FNPC";
-const APP_VERSION = "1.0.1";
+const APP_VERSION = "1.0.2";
 const USE_SUPABASE = true;
 
 // ── PrestaShop Webservice ────────────────────────────────────────────────────
@@ -524,6 +524,7 @@ export default function App() {
   const [psStep, setPsStep] = useState(''); // étape en cours lors d'une action PS
   const [psOrders, setPsOrders] = useState([]);
   const [psBypass, setPsBypass] = useState(false); // true = désactive la vérif PS (dépannage) // history of created orders
+  const [newMedalLabel, setNewMedalLabel] = useState('');
   const [newMedalShort, setNewMedalShort] = useState('');
   const [newMedalYears, setNewMedalYears] = useState('');
   const [newMedalColor, setNewMedalColor] = useState('#1B3764');
