@@ -28,7 +28,7 @@ class ErrorBoundary extends React.Component {
 export { ErrorBoundary };
 
 const APP_TITLE   = "Demande Médaille FNPC";
-const APP_VERSION = "1.0.2";
+const APP_VERSION = "1.0.3";
 const USE_SUPABASE = true;
 
 // ── PrestaShop Webservice ────────────────────────────────────────────────────
@@ -94,7 +94,7 @@ const prestashop = {
       + '<id_address_invoice>' + addressId + '</id_address_invoice>'
       + '<id_currency>1</id_currency><id_lang>1</id_lang><id_carrier>1</id_carrier>'
       + '<module>ps_checkpayment</module><payment>Cheque</payment>'
-      + '<current_state>2</current_state>'
+      + '<current_state>1</current_state>'                 // 1 = En attente paiement chèque (pas "payé" : sinon PS tente d'enregistrer un paiement et plante)
       + '<conversion_rate>1.000000</conversion_rate>'
       + '<total_paid>' + total + '</total_paid>'
       + '<total_paid_real>0.00</total_paid_real>'        // 0 = pas encore payé (paiement après création)
