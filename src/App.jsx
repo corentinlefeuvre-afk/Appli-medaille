@@ -81,7 +81,10 @@ const prestashop = {
     const d = await psCall('/carts', 'POST', xml);
     return d?.cart ?? null;
   },
-  async createOrder(customerId, cartId, addressId, productId, qty, reference) {
+  async createOrder(customerId, cartId, addressId, productId, qty, reference, unitPrice = 0) {
+    // PrestaShop exige les totaux à la création d'une commande via webservice
+    // (il ne les recalcule pas depuis le panier comme le tunnel classique).
+    const total = ((Number(unitPrice) || 0) * (Number(qty) || 0)).toFixed(2);
     const xml = '<?xml version="1.0" encoding="UTF-8"?>'
       + '<prestashop xmlns:xlink="http://www.w3.org/1999/xlink"><order>'
       + '<id_customer>' + customerId + '</id_customer>'
@@ -91,6 +94,11 @@ const prestashop = {
       + '<id_currency>1</id_currency><id_lang>1</id_lang><id_carrier>1</id_carrier>'
       + '<module>ps_checkpayment</module><payment>Cheque</payment>'
       + '<current_state>2</current_state>'
+      + '<conversion_rate>1.000000</conversion_rate>'
+      + '<total_paid>' + total + '</total_paid>'
+      + '<total_paid_real>0.00</total_paid_real>'        // 0 = pas encore payé (paiement après création)
+      + '<total_products>' + total + '</total_products>'
+      + '<total_products_wt>' + total + '</total_products_wt>'
       + '<reference>' + reference + '</reference>'
       + '<order_rows><order_row>'
       + '<id_product>' + productId + '</id_product>'
@@ -806,7 +814,7 @@ export default function App() {
         if (!cart?.id) throw new Error('Erreur lors de la création du panier PrestaShop');
 
         const ref   = `FNPC-TDR-${req.dept.split(' ')[0]}-${req.id}`;
-        const order = await prestashop.createOrder(customer.id, cart.id, addresses[0].id, prodId, 1, ref);
+        const order = await prestashop.createOrder(customer.id, cart.id, addresses[0].id, prodId, 1, ref, tarif);
         if (!order?.id) throw new Error('Erreur lors de la création de la commande PrestaShop');
 
         // PS OK — on mémorise l'ID de commande mais on ne valide pas encore
@@ -2437,7 +2445,7 @@ export default function App() {
           // 5. Create order (qty = nb TDR du département)
           const ref = `FNPC-TDR-${dept.split(' ')[0]}-${today()}`;
           setPsStep(`📋 [${dept}] Création de la commande (${reqs.length} TDR)…`);
-          const order = await prestashop.createOrder(customer.id, cart.id, addrId, productId, reqs.length, ref);
+          const order = await prestashop.createOrder(customer.id, cart.id, addrId, productId, reqs.length, ref, tarif);
           if (!order?.id) {
             results.push({ dept, status:'error', msg:'Erreur création commande' });
             continue;
