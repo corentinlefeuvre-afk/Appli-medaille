@@ -79,7 +79,8 @@ const prestashop = {
       + '<id_address_invoice>' + addressId + '</id_address_invoice>'
       + '<rows></rows></cart></prestashop>';
     const d = await psCall('/carts', 'POST', xml);
-    return d?.cart ?? null;
+    if (!d?.cart?.id) throw new Error('Réponse panier inattendue de PrestaShop : ' + String(JSON.stringify(d)).slice(0, 220));
+    return d.cart;
   },
   async createOrder(customerId, cartId, addressId, productId, qty, reference, unitPrice = 0) {
     // PrestaShop exige les totaux à la création d'une commande via webservice
@@ -107,7 +108,8 @@ const prestashop = {
       + '</order_row></order_rows>'
       + '</order></prestashop>';
     const d = await psCall('/orders', 'POST', xml);
-    return d?.order ?? null;
+    if (!d?.order?.id) throw new Error('Réponse commande inattendue de PrestaShop : ' + String(JSON.stringify(d)).slice(0, 220));
+    return d.order;
   },
 };
 
