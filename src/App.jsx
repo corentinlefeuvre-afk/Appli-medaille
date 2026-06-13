@@ -28,7 +28,7 @@ class ErrorBoundary extends React.Component {
 export { ErrorBoundary };
 
 const APP_TITLE   = "Demande Médaille FNPC";
-const APP_VERSION = "1.1.0";
+const APP_VERSION = "1.2.1";
 const USE_SUPABASE = true;
 
 // ── PrestaShop Webservice ────────────────────────────────────────────────────
@@ -331,6 +331,39 @@ const DEFAULT_DIPLOMA_TEMPLATES = {
 const DIPLOMA_FIELD_LABELS = { niveau:'Échelon', nom:'Prénom + Nom', date:'Date', numero:'Numéro', agrafe:'Agrafe' };
 const MEDAL_TO_GABARIT = { temoignage:'temoignage', bronze:'medaille', argent:'medaille', vermeil:'medaille', grand_or:'medaille', gm_argent:'gm_argent', gm_or:'gm_or' };
 const DIPLOMA_SAMPLE = { niveau:'Bronze', nom:'Marie DUPONT', date:'12 juin 2026', numero:'FNPC-2026-075-0001', agrafe:'Agrafe Or' };
+
+// ─── ONBOARDING (visite guidée première connexion) ─────────────────────────────
+const TOUR_STEPS = {
+  antenne: [
+    { icon:'👋', title:"Bienvenue sur l'Appli Médaille FNPC", body:"En tant qu'Antenne, vous proposez vos bénévoles aux distinctions et suivez chaque dossier. Voici l'essentiel en quelques étapes." },
+    { icon:'✚', title:'Créer une demande', body:"Cliquez sur « Nouvelle demande » (icône ✚) dans le menu de gauche : choisissez le bénévole, la distinction, et saisissez les motivations (50 caractères minimum)." },
+    { icon:'📋', title:'Suivre vos demandes', body:"Le menu « Demandes » liste tous vos dossiers. Chaque demande avance par statuts : Brouillon → Soumis Antenne → Soumis APC → Commission → Diplôme." },
+    { icon:'📥', title:'Le circuit de validation', body:"Vos demandes sont validées d'abord par votre APC, puis par la Commission FNPC. Une notification vous informe à chaque étape." },
+    { icon:'✅', title:"C'est parti !", body:"Vous pourrez rouvrir cette visite à tout moment grâce au bouton « ? » en haut à droite." },
+  ],
+  departement: [
+    { icon:'👋', title:"Bienvenue sur l'Appli Médaille FNPC", body:"En tant que Président d'APC, vous validez les demandes de vos antennes, créez vos propres demandes et les transmettez à la Commission FNPC." },
+    { icon:'📥', title:'Valider les demandes des antennes', body:"Dans le Tableau de bord, l'onglet « Soumises APC » regroupe les demandes de vos antennes : vous pouvez les valider ou les refuser." },
+    { icon:'✚', title:'Créer une demande', body:"Le menu « Nouvelle demande » (✚) vous permet de créer un dossier ; en tant qu'APC il part directement en Commission FNPC." },
+    { icon:'📦', title:'Envoyer en Commission', body:"L'onglet « Prêts à envoyer » rassemble vos dossiers validés pour un envoi groupé vers la Commission FNPC." },
+    { icon:'✅', title:"C'est parti !", body:"Vous pourrez rouvrir cette visite à tout moment grâce au bouton « ? » en haut à droite." },
+  ],
+};
+
+// Préambule pré-rempli par défaut pour une nouvelle agrafe (modifiable)
+const DEFAULT_AGRAFE_TEXTE = `Les dernières années ont été marquées par un engagement inédit et exemplaire des bénévoles dans la crise sanitaire, dans la crise ukrainienne, puis dans le déploiement de détachements à Mayotte et à la Réunion.
+Pour mettre à l'honneur et en valeur cet engagement sans faille, la FNPC a décidé de réaliser une remise de distinctions honorifiques sous la forme d'une promotion spéciale de la médaille fédérale.
+Celle-ci met à l'honneur les femmes et hommes qui ont pleinement œuvré dans les crises que la Protection Civile a su relever en confirmant sa place de première association agréée de sécurité civile de France.`;
+
+const DEFAULT_LIST_INTRO = "Sur proposition des Présidents d'APC et Administrateurs fédéraux, et après étude des dossiers par la commission honneurs et récompenses de la Fédération Nationale de Protection Civile, le Président a l'honneur de promouvoir les personnes suivantes :";
+
+// Modèle du document Word « Liste des récipiendaires » — éditable et persisté (app_config: word_template)
+const DEFAULT_WORD_CFG = {
+  titre: 'Liste des récipiendaires',
+  intro: DEFAULT_LIST_INTRO,
+  preambule: DEFAULT_AGRAFE_TEXTE,
+  president: '',
+};
 const DIPLOMA_PAGE_W = 900; // largeur px de l'aperçu éditeur (A4 paysage)
 const ptToPx = (pt, w=DIPLOMA_PAGE_W) => pt * w / 841.68;
 const FONT_OPTIONS = ['Arial','Helvetica','Times New Roman','Georgia','Garamond','Verdana','Trebuchet MS','Calibri','Courier New','Playfair Display'];
@@ -419,7 +452,7 @@ export default function App() {
   // ── Auth : restaure la session depuis sessionStorage ─────────────────────
   useEffect(() => {
     const u = auth.restoreSession();
-    if (u) { setAuthUser(u); setRole(u.role); }
+    if (u) { setAuthUser(u); setRole(u.role); maybeStartTour(u.role); }
   }, []);
 
   const doLogin = async () => {
@@ -427,7 +460,7 @@ export default function App() {
     setLoginLoading(true); setLoginError('');
     try {
       const u = await auth.login(loginEmail, loginPassword);
-      setAuthUser(u); setRole(u.role); setPage('dashboard');
+      setAuthUser(u); setRole(u.role); setPage('dashboard'); maybeStartTour(u.role);
     } catch(e) {
       setLoginError(e.message);
     }
@@ -469,6 +502,8 @@ export default function App() {
         if (emailTpl_cfg) setEmailTemplates({ ...DEFAULT_EMAIL_TEMPLATES, ...emailTpl_cfg }); // merge : on garde les nouveaux modèles par défaut
         const dipTpl_cfg = await db.loadConfig('diploma_templates');
         if (dipTpl_cfg) setDiplomaTpl({ ...DEFAULT_DIPLOMA_TEMPLATES, ...dipTpl_cfg });
+        const wordCfg_cfg = await db.loadConfig('word_template');
+        if (wordCfg_cfg) setWordCfg({ ...DEFAULT_WORD_CFG, ...wordCfg_cfg });
         const depts_cfg = await db.loadDepartments();
         if (depts_cfg && Object.keys(depts_cfg).length > 0) setDeptAddresses(depts_cfg);
         setDbConnected(true);
@@ -580,10 +615,18 @@ export default function App() {
   const [paramWmA, setParamWmA] = useState('');
   const [paramWmD, setParamWmD] = useState('');
   const [paramAgrNom, setParamAgrNom] = useState('');
-  const [paramAgrTexte, setParamAgrTexte] = useState('');
+  const [paramAgrTexte, setParamAgrTexte] = useState(DEFAULT_AGRAFE_TEXTE);
+  const [tourStep, setTourStep] = useState(null); // null = visite fermée ; sinon index d'étape
+  const [wordCfg, setWordCfg] = useState(DEFAULT_WORD_CFG);
   const [paramAgrDepts, setParamAgrDepts] = useState([]);
   const [agrEditId, setAgrEditId] = useState(null);
   const [agrEditDepts, setAgrEditDepts] = useState([]);
+  const [agrEditNom, setAgrEditNom] = useState('');
+  const [agrEditTexte, setAgrEditTexte] = useState('');
+  // Correction FNPC (gestion peut tout modifier sans changer le statut)
+  const [gEdit, setGEdit] = useState(null); // requête en cours de correction
+  const [gNom, setGNom] = useState(''); const [gPrenom, setGPrenom] = useState('');
+  const [gJust, setGJust] = useState(''); const [gDept, setGDept] = useState(''); const [gMedal, setGMedal] = useState('');
   const [editReqId, setEditReqId] = useState(null);
   const [gDashDept, setGDashDept] = useState('all');
   const [gDashYear, setGDashYear] = useState('all');
@@ -962,7 +1005,7 @@ export default function App() {
       diplomeId:null, statut:'brouillon',
       benevole:{ ...vol, fonctions:nrFonctions||vol.fonctions||'', distinctions:nrDistinctions||vol.distinctions||'' },
       medalType, demandeur:ROLES[role].org, emailDemandeur:nrEmail, dept, niveau:role,
-      dateCreation:today(), notifications:nrNotif, agrafe:nrAgrafe, agrafeDepts:nrAgrafeDepts,
+      dateCreation:today(), notifications:nrNotif, agrafe:nrMedal==='temoignage'?false:nrAgrafe, agrafeDepts:nrMedal==='temoignage'?[]:nrAgrafeDepts,
       paiement:null, expedition:null,
       justification:nrJust, dateReception:nrDateRecep, commentaire:nrCommentaire,
       historique:[{ date:today(), action:'Brouillon créé', auteur:ROLES[role].label, comment:'' }],
@@ -1048,6 +1091,9 @@ export default function App() {
     const dept = lockedDept || nrDept || vol.dept;
     if (!editReqId && deptDisabled[dept]) { fire('Ce département est désactivé — impossible de soumettre.', 'err'); return; }
     const medalType = medalTypes.find(m => m.id === nrMedal);
+    const isTemoig = medalType.category === 'temoignage';
+    const agrafeFlag = isTemoig ? false : nrAgrafe;
+    const agrafeIds  = isTemoig ? []    : nrAgrafeDepts;
     const isExceptional = vol.ans < medalType.years;
     // Duplicate check: same benevole + same medal, unless agrafe or exceptional facts
     if (!editReqId && !nrAgrafeDepts.length && !isExceptional) {
@@ -1068,7 +1114,7 @@ export default function App() {
       const orig = getReq(editReqId);
       upd(editReqId, {
         benevole:{ ...vol, fonctions:nrFonctions||vol.fonctions||'', distinctions:nrDistinctions||vol.distinctions||'' },
-        medalType, emailDemandeur:nrEmail, dept, notifications:nrNotif, agrafe:nrAgrafe, agrafeDepts:nrAgrafeDepts,
+        medalType, emailDemandeur:nrEmail, dept, notifications:nrNotif, agrafe:agrafeFlag, agrafeDepts:agrafeIds,
         justification:nrJust, dateReception:nrDateRecep, commentaire:nrCommentaire, statut:targetStatut,
         paiement: medalType.payant ? (orig.paiement||'en_attente') : null,
         historique:[...orig.historique,{ date:today(), action:`Demande modifiée — ${createAction}`, auteur:ROLES[role].label, comment:'' }],
@@ -1081,7 +1127,7 @@ export default function App() {
         diplomeId:null, statut:targetStatut,
         benevole:{ ...vol, fonctions:nrFonctions||vol.fonctions||'', distinctions:nrDistinctions||vol.distinctions||'' },
         medalType, demandeur:ROLES[role].org, emailDemandeur:nrEmail, dept, niveau:role,
-        dateCreation:today(), notifications:nrNotif, agrafe:nrAgrafe, agrafeDepts:nrAgrafeDepts,
+        dateCreation:today(), notifications:nrNotif, agrafe:agrafeFlag, agrafeDepts:agrafeIds,
         paiement: medalType.payant ? 'en_attente' : null, expedition:null,
         justification:nrJust, dateReception:nrDateRecep, commentaire:nrCommentaire,
         historique:[{ date:today(), action:createAction, auteur:ROLES[role].label, comment:'' }],
@@ -1108,6 +1154,68 @@ export default function App() {
   const canIssue    = r => role==='gestion' && r?.statut==='valide_federation';
   const canRefuse   = r => (role==='antenne'&&r?.statut==='soumis_antenne')||(role==='departement'&&r?.statut==='soumis')||(role==='commission'&&r?.statut==='en_commission');
   const canResubmit = r => ['refuse_dept','refuse_federation'].includes(r?.statut) && ['antenne','departement'].includes(role);
+  // Noms des agrafes attachées à une demande (depuis le menu Agrafes)
+  const agrafeNoms = (r) => (r?.agrafeDepts || []).map(id => agrafes.find(a => a.id === id)?.nom).filter(Boolean).join(', ');
+
+  // ── Visite guidée (onboarding) ──
+  const tourSeen = (r) => { try { return !!localStorage.getItem('fnpc_tour_v1_' + r); } catch { return true; } };
+  const markTourSeen = (r) => { try { localStorage.setItem('fnpc_tour_v1_' + r, '1'); } catch {} };
+  const maybeStartTour = (r) => { if ((r === 'antenne' || r === 'departement') && !tourSeen(r)) setTourStep(0); };
+  const closeTour = () => { markTourSeen(role); setTourStep(null); };
+
+  const saveWordCfg = () => { db.saveConfig('word_template', wordCfg); fire('Modèle du document Word enregistré ✓'); };
+
+  // ── Génération du Word « Liste des récipiendaires » pour une agrafe ──
+  const genAgrafeWord = async (ag) => {
+    const agReqs = requests.filter(r => r.agrafeDepts && r.agrafeDepts.includes(ag.id) && ['valide_federation','diplome_emis','expedie'].includes(r.statut));
+    if (!agReqs.length) { fire('Aucune demande validée pour cette agrafe', 'err'); return; }
+    fire('Génération du document Word…');
+    try {
+      const { Document, Packer, Paragraph, HeadingLevel, AlignmentType } = await import('docx');
+      const groups = {};
+      agReqs.forEach(r => { (groups[r.medalType.id] = groups[r.medalType.id] || []).push(r); });
+      const order = Object.keys(groups).sort((a,b)=>{ const ma=MEDAL_TYPES.find(m=>m.id===a), mb=MEDAL_TYPES.find(m=>m.id===b); return (mb?.years||0)-(ma?.years||0); });
+      const children = [
+        new Paragraph({ text:(wordCfg.titre||'Liste des récipiendaires'), heading:HeadingLevel.TITLE, alignment:AlignmentType.CENTER }),
+        new Paragraph({ text:ag.nom, heading:HeadingLevel.HEADING_1, alignment:AlignmentType.CENTER }),
+        new Paragraph({ text:'' }),
+      ];
+      const preamble = (ag.texte || wordCfg.preambule || DEFAULT_AGRAFE_TEXTE).trim();
+      if (preamble) {
+        children.push(new Paragraph({ text:'Préambule', heading:HeadingLevel.HEADING_2 }));
+        preamble.split(/\n+/).forEach(p => children.push(new Paragraph({ text:p.trim() })));
+        children.push(new Paragraph({ text:'' }));
+      }
+      children.push(new Paragraph({ text:'Liste des personnels distingués', heading:HeadingLevel.HEADING_2 }));
+      children.push(new Paragraph({ text:(wordCfg.intro||DEFAULT_LIST_INTRO) }));
+      children.push(new Paragraph({ text:'' }));
+      order.forEach(mid => {
+        const m = MEDAL_TYPES.find(x => x.id === mid);
+        children.push(new Paragraph({ text:m?.label || mid, heading:HeadingLevel.HEADING_3 }));
+        groups[mid].forEach(r => {
+          const civ = r.benevole.genre === 'F' ? 'Mme' : 'M';
+          const dept = (r.dept || '').split(' - ')[1] || r.dept || '';
+          children.push(new Paragraph({ text:`${civ} ${r.benevole.nom} ${r.benevole.prenom}, bénévole de la Protection Civile de ${dept}` }));
+        });
+        children.push(new Paragraph({ text:'' }));
+      });
+      if ((wordCfg.president||'').trim()) {
+        children.push(new Paragraph({ text:'' }));
+        children.push(new Paragraph({ text:wordCfg.president.trim(), alignment:AlignmentType.RIGHT }));
+      }
+      const doc = new Document({ sections:[{ children }] });
+      const blob = await Packer.toBlob(doc);
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `Liste_recipiendaires_${(ag.nom || 'agrafe').replace(/[^a-z0-9]+/gi,'_')}.docx`;
+      a.click();
+      fire('Document Word généré ✓');
+    } catch (e) {
+      console.error('genAgrafeWord', e);
+      fire('Erreur génération Word — la dépendance « docx » doit être installée (npm install).', 'err');
+    }
+  };
+
   const canEdit = r => (role==='departement' && ['brouillon','soumis','pret_commission','soumis_antenne','refuse_dept','refuse_federation'].includes(r?.statut))
     || (role==='antenne' && ['brouillon','soumis_antenne','refuse_dept'].includes(r?.statut));
 
@@ -1127,6 +1235,19 @@ export default function App() {
     setSelected(null);
     setPage('nouvelle');
     fire('Demande chargée — modifiez puis soumettez ✓');
+  };
+
+  // Correction FNPC : modifie les champs sans changer le statut du dossier
+  const openGEdit = (r) => { setGEdit(r); setGNom(r.benevole.nom||''); setGPrenom(r.benevole.prenom||''); setGJust(r.justification||''); setGDept(r.dept||''); setGMedal(r.medalType.id); setSelected(null); };
+  const saveGEdit = () => {
+    if (!gEdit) return;
+    const medalType = medalTypes.find(m => m.id === gMedal) || gEdit.medalType;
+    upd(gEdit.id, {
+      benevole:{ ...gEdit.benevole, nom:gNom.trim(), prenom:gPrenom.trim() },
+      justification:gJust, dept:gDept, medalType,
+      historique:[...gEdit.historique, { date:today(), action:'Corrigé par Gestion FNPC', auteur:ROLES[role]?.label||'Gestion FNPC', comment:'' }],
+    });
+    fire('Demande corrigée ✓'); setGEdit(null);
   };
 
   const alertInfo =
@@ -1709,7 +1830,7 @@ export default function App() {
                 ⚡ <strong>Délai non atteint :</strong> Cette distinction sera accordée uniquement pour faits exceptionnels. Veillez à détailler précisément les faits dans le champ Motivations.
               </div>
             )}
-            {agrafes.filter(a=>a.actif&&a.depts.includes(lockedDept||nrDept||vol.dept)).length>0 && (
+            {nrMedal!=='temoignage' && agrafes.filter(a=>a.actif&&a.depts.includes(lockedDept||nrDept||vol.dept)).length>0 && (
               <div style={{ marginTop:14, borderTop:'1px solid #f1f5f9', paddingTop:12 }}>
                 <label className="fl" style={{ marginBottom:8 }}>🏅 Agrafes disponibles</label>
                 {agrafes.filter(a=>a.actif&&a.depts.includes(lockedDept||nrDept||vol.dept)).map(ag=>(
@@ -2030,7 +2151,7 @@ export default function App() {
                     <input type="checkbox" checked={selectedBatch.includes(req.id)} onChange={()=>!unpaid&&toggleBatch(req.id)} disabled={unpaid} style={{ width:15, height:15, flexShrink:0 }}/>
                     <div style={{ flex:1 }}>
                       <div style={{ fontFamily:'Playfair Display,serif', fontWeight:700, color:'#1B3764', fontSize:14 }}>{req.benevole.prenom} {req.benevole.nom}</div>
-                      <div style={{ color:'#E87722', fontSize:12, fontWeight:600 }}>{req.medalType.label}{req.agrafe?'  🏅':''}</div>
+                      <div style={{ color:'#E87722', fontSize:12, fontWeight:600 }}>{req.medalType.label}{req.agrafe?`  🏅 Agrafe : ${agrafeNoms(req)||'—'}`:''}</div>
                       {unpaid&&<span style={{ fontSize:10, background:'#fef9c3', color:'#92400e', borderRadius:10, padding:'0 6px', fontWeight:700 }}>🔒 Impression bloquée — paiement requis ({tarif}€)</span>}
                     </div>
                     <div style={{ textAlign:'right', flexShrink:0 }}>
@@ -2310,8 +2431,8 @@ export default function App() {
   // ─── SIDEBAR ITEMS ────────────────────────────────────────────────────────────
 
   function AgrafesPage() {
-    const startEdit = (ag) => { setAgrEditId(ag.id); setAgrEditDepts([...ag.depts]); };
-    const saveEdit = () => { setAgrafes(p=>p.map(a=>a.id!==agrEditId?a:{ ...a, depts:agrEditDepts })); setAgrEditId(null); fire('Départements mis à jour ✓'); };
+    const startEdit = (ag) => { setAgrEditId(ag.id); setAgrEditDepts([...ag.depts]); setAgrEditNom(ag.nom||''); setAgrEditTexte(ag.texte||''); };
+    const saveEdit = () => { setAgrafes(p=>p.map(a=>a.id!==agrEditId?a:{ ...a, nom:agrEditNom.trim()||a.nom, texte:agrEditTexte, depts:agrEditDepts })); setAgrEditId(null); fire('Agrafe mise à jour ✓'); };
     return (
       <div style={{ maxWidth:680 }}>
         <h1 style={H1}>Médailles exceptionnelles (Agrafes)</h1>
@@ -2328,41 +2449,22 @@ export default function App() {
               </div>
               <span className="badge" style={{ background:ag.actif?'#d1fae5':'#f1f5f9', color:ag.actif?'#059669':'#94a3b8', flexShrink:0 }}>{ag.actif?'Active':'Inactive'}</span>
               <button className="btn btn-outline btn-sm" onClick={()=>agrEditId===ag.id?setAgrEditId(null):startEdit(ag)}>✏️ Modifier</button>
-              <button className="btn btn-sm" style={{ background:'#1B3764', color:'white' }} onClick={()=>{
-                // Generate recipients list document (CSV download)
-                const agReqs = requests.filter(r=>r.agrafeDepts&&r.agrafeDepts.includes(ag.id)&&['valide_federation','diplome_emis','expedie'].includes(r.statut));
-                if(!agReqs.length){ fire('Aucune demande validée pour cette agrafe','err'); return; }
-                const byMedal = {};
-                agReqs.forEach(r=>{ const k=r.medalType.label; if(!byMedal[k])byMedal[k]=[]; byMedal[k].push(r); });
-                let txt = 'FÉDÉRATION NATIONALE DE LA PROTECTION CIVILE\n';
-                txt += 'Liste des récipiendaires — ' + ag.nom + '\n';
-                txt += 'Généré le ' + today() + '\n';
-                txt += '='.repeat(60) + '\n\n';
-                if (ag.texte) {
-                  txt += ag.texte + '\n\n';
-                  txt += '─'.repeat(60) + '\n\n';
-                }
-                txt += 'LISTE DES PERSONNELS DISTINGUÉS\n\n';
-                Object.entries(byMedal).sort().forEach(([medal,reqs])=>{
-                  txt += `${medal}\n${'—'.repeat(medal.length)}\n`;
-                  reqs.forEach(r=>{ const civ=r.benevole.genre==='F'?'Mme':'M'; txt += `${civ} ${r.benevole.nom} ${r.benevole.prenom}, bénévole de la Protection Civile de ${r.dept.split(' - ')[1]||r.dept}\n`; });
-                  txt += '\n';
-                });
-                const blob = new Blob(['\uFEFF'+txt],{type:'text/plain;charset=utf-8'});
-                const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`liste_recipiendaires_${ag.nom.replace(/\s+/g,'_')}.txt`; a.click();
-                fire('Liste générée ✓');
-              }}>📄 Générer la liste</button>
+              <button className="btn btn-sm" style={{ background:'#1B3764', color:'white' }} onClick={()=>genAgrafeWord(ag)}>📄 Générer le Word</button>
               <button className="btn btn-outline btn-sm" onClick={()=>setAgrafes(p=>p.map(a=>a.id!==ag.id?a:{...a,actif:!a.actif}))}>{ag.actif?'Désactiver':'Activer'}</button>
               <button className="btn btn-danger btn-sm" onClick={()=>setAgrafes(p=>p.filter(a=>a.id!==ag.id))}>✕</button>
             </div>
             {agrEditId===ag.id&&<div style={{ borderTop:'1px solid #f1f5f9', paddingTop:12 }}>
+              <label className="fl" style={{ marginBottom:6 }}>Nom de l'agrafe *</label>
+              <input className="input" style={{ marginBottom:10 }} value={agrEditNom} onChange={e=>setAgrEditNom(e.target.value)} placeholder="Ex: Médaille Exceptionnelle Inondations 2025"/>
+              <label className="fl" style={{ marginBottom:6 }}>Texte du document <span style={{ color:'#94a3b8', fontWeight:400 }}>(préambule de la liste)</span></label>
+              <textarea className="textarea" rows={3} style={{ marginBottom:10 }} value={agrEditTexte} onChange={e=>setAgrEditTexte(e.target.value)}/>
               <label className="fl" style={{ marginBottom:6 }}>Départements concernés <span style={{ color:'#94a3b8', fontWeight:400 }}>(Ctrl/Cmd pour sélection multiple)</span></label>
               <select className="select" multiple style={{ height:110 }} value={agrEditDepts} onChange={e=>setAgrEditDepts([...e.target.selectedOptions].map(o=>o.value))}>
                 {DEPTS.map(d=><option key={d} value={d}>{d}</option>)}
               </select>
               <p style={{ fontSize:11, color:'#E87722', marginTop:4 }}>{agrEditDepts.length} sélectionné(s)</p>
               <div style={{ display:'flex', gap:8, marginTop:10 }}>
-                <button className="btn btn-orange btn-sm" onClick={saveEdit} disabled={!agrEditDepts.length}>💾 Enregistrer</button>
+                <button className="btn btn-orange btn-sm" onClick={saveEdit} disabled={!agrEditNom.trim()||!agrEditDepts.length}>💾 Enregistrer</button>
                 <button className="btn btn-outline btn-sm" onClick={()=>setAgrEditId(null)}>Annuler</button>
               </div>
             </div>}
@@ -2390,11 +2492,33 @@ export default function App() {
           </div>
           <button className="btn btn-orange" disabled={!paramAgrNom||!paramAgrDepts.length} onClick={()=>{
             setAgrafes(p=>[...p,{ id:`AGR${Date.now()}`, nom:paramAgrNom, texte:paramAgrTexte, depts:paramAgrDepts, actif:true }]);
-            setParamAgrNom(''); setParamAgrTexte(''); setParamAgrDepts([]);
+            setParamAgrNom(''); setParamAgrTexte(wordCfg.preambule||DEFAULT_AGRAFE_TEXTE); setParamAgrDepts([]);
             fire('Agrafe créée ✓');
           }}>
             🏅 Créer l'agrafe
           </button>
+        </div>
+
+        <div className="card" style={{ marginTop:18, borderLeft:'4px solid #1B3764' }}>
+          <div className="st">📄 Modèle du document Word</div>
+          <p style={{ color:'#64748b', fontSize:12, marginBottom:12 }}>Contenu commun à tous les documents « Liste des récipiendaires ». Le <strong>préambule</strong> peut être surchargé agrafe par agrafe via son « Texte du document ».</p>
+          <div className="fg"><label className="fl">Titre du document</label>
+            <input className="input" value={wordCfg.titre} onChange={e=>setWordCfg(c=>({ ...c, titre:e.target.value }))}/>
+          </div>
+          <div className="fg"><label className="fl">Préambule par défaut</label>
+            <textarea className="textarea" rows={5} value={wordCfg.preambule} onChange={e=>setWordCfg(c=>({ ...c, preambule:e.target.value }))}/>
+            <p className="fh">Un paragraphe par ligne. Utilisé quand l'agrafe n'a pas son propre texte.</p>
+          </div>
+          <div className="fg"><label className="fl">Phrase d'introduction de la liste</label>
+            <textarea className="textarea" rows={3} value={wordCfg.intro} onChange={e=>setWordCfg(c=>({ ...c, intro:e.target.value }))}/>
+          </div>
+          <div className="fg"><label className="fl">Signataire <span style={{ color:'#94a3b8', fontWeight:400 }}>(optionnel — ex : « Le Président, François RICHEZ »)</span></label>
+            <input className="input" value={wordCfg.president} onChange={e=>setWordCfg(c=>({ ...c, president:e.target.value }))} placeholder="Le Président, …"/>
+          </div>
+          <div style={{ display:'flex', gap:8 }}>
+            <button className="btn btn-orange btn-sm" onClick={saveWordCfg}>💾 Enregistrer le modèle</button>
+            <button className="btn btn-outline btn-sm" onClick={()=>{ if(confirm('Réinitialiser le modèle Word par défaut ?')) setWordCfg(DEFAULT_WORD_CFG); }}>↺ Défaut</button>
+          </div>
         </div>
       </div>
     );
@@ -3162,7 +3286,7 @@ export default function App() {
           <div style={{ marginTop:10, display:'flex', flexDirection:'column', gap:6 }}>
             {[['antenne','Antenne Paris 12e'],['departement','APC 75 - Paris Seine'],['commission','Commission FNPC'],['gestion','Gestion FNPC']].map(([r,l])=>(
               <button key={r} className="btn btn-outline btn-sm" style={{ justifyContent:'center', fontSize:12 }}
-                onClick={()=>{ const u={ id:`demo-${r}`, email:`demo-${r}@fnpc.fr`, nom:l, prenom:'Démo', role:r, dept:'75 - Paris Seine', antenne:'Paris 12ème' }; setAuthUser(u); setRole(r); setPage('dashboard'); auth.saveSession(u); }}>
+                onClick={()=>{ const u={ id:`demo-${r}`, email:`demo-${r}@fnpc.fr`, nom:l, prenom:'Démo', role:r, dept:'75 - Paris Seine', antenne:'Paris 12ème' }; setAuthUser(u); setRole(r); setPage('dashboard'); auth.saveSession(u); maybeStartTour(r); }}>
                 🔑 {l}
               </button>
             ))}
@@ -3207,6 +3331,8 @@ export default function App() {
           </>}
           {role!=='antenne' && (stats.delayedDept>0||stats.delayedComm>0) && <span onClick={alertInfo?.action} style={{ background:'#ef4444', color:'white', borderRadius:20, padding:'2px 8px', fontSize:11, fontWeight:800, cursor:'pointer' }} title="Demandes en retard">⏰ {role==='departement'?stats.delayedDept:stats.delayedComm}</span>}
           {/* User badge + logout */}
+          {authUser && ['antenne','departement','commission'].includes(role) && <a href="mailto:medaille@protection-civile.org?subject=Aide%20-%20Appli%20Medaille%20FNPC" title="Pour toute question : medaille@protection-civile.org" style={{ display:'inline-flex', alignItems:'center', gap:5, height:26, padding:'0 10px', borderRadius:13, border:'1px solid rgba(255,255,255,0.3)', background:'rgba(255,255,255,0.1)', color:'white', cursor:'pointer', fontSize:12, fontWeight:600, textDecoration:'none' }}>✉️ Aide</a>}
+          {authUser && (role==='antenne'||role==='departement') && <button onClick={()=>setTourStep(0)} title="Revoir la visite guidée" style={{ width:26, height:26, borderRadius:'50%', border:'1px solid rgba(255,255,255,0.3)', background:'rgba(255,255,255,0.1)', color:'white', cursor:'pointer', fontSize:13, fontWeight:700, lineHeight:1 }}>?</button>}
           {authUser && <div style={{ display:'flex', alignItems:'center', gap:6 }}>
             <div style={{ textAlign:'right' }}>
               <div style={{ fontSize:12, color:'white', fontWeight:700 }}>{authUser.prenom} {authUser.nom}</div>
@@ -3294,7 +3420,7 @@ export default function App() {
             <div style={{ display:'flex', gap:10, alignItems:'center', background:selected.medalType.light, border:`1px solid ${selected.medalType.color}40`, borderRadius:8, padding:11, marginBottom:14 }}>
               <div style={{ width:40, height:40, borderRadius:'50%', background:selected.medalType.color, display:'flex', alignItems:'center', justifyContent:'center', fontSize:18, flexShrink:0 }}>🎖</div>
               <div style={{ flex:1 }}>
-                <div style={{ fontFamily:'Playfair Display,serif', fontWeight:700, color:'#1B3764', fontSize:14 }}>{selected.medalType.label}{selected.agrafe?' 🏅 Agrafe':''}</div>
+                <div style={{ fontFamily:'Playfair Display,serif', fontWeight:700, color:'#1B3764', fontSize:14 }}>{selected.medalType.label}{selected.agrafe?` 🏅 Agrafe : ${agrafeNoms(selected)||'—'}`:''}</div>
                 <div style={{ fontSize:11, color:'#64748b', marginTop:1 }}>{selected.medalType.years} ans requis · {selected.benevole.ans} ans</div>
                 {selected.medalType.payant&&<div style={{ marginTop:4 }}><span style={{ background:selected.paiement==='paye'?'#d1fae5':'#fef9c3', color:selected.paiement==='paye'?'#059669':'#92400e', borderRadius:10, padding:'1px 8px', fontSize:11, fontWeight:700 }}>{selected.paiement==='paye'?`✓ Payé (${tarif}€)`:`⏳ Paiement ${tarif}€ requis`}</span></div>}
               </div>
@@ -3322,9 +3448,13 @@ export default function App() {
             {selected.diplomeId&&<div style={{ background:'#FFF4E8', border:'1px solid #E87722', borderRadius:8, padding:'10px 14px', marginBottom:14 }}>
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
                 <div><div style={{ fontSize:10, color:'#C45A00', fontWeight:700, letterSpacing:'1px' }}>N° DIPLÔME</div><div style={{ fontFamily:'monospace', color:'#E87722', fontSize:16, fontWeight:700 }}>{selected.diplomeId}</div></div>
-                {role==='gestion'&&<div style={{ display:'flex', gap:6 }}>
+                {role==='gestion'&&<div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
                   <button className="btn btn-outline btn-sm" onClick={()=>{ setDiplomaView({ ...selected, _printMode:'template' }); setSelected(null); }}>📄 Template</button>
                   <button className="btn btn-orange btn-sm" onClick={()=>{ setDiplomaView({ ...selected, _printMode:'full' }); setSelected(null); }}>🖨 PDF complet</button>
+                  {selected.agrafe&&<>
+                    <button className="btn btn-outline btn-sm" onClick={()=>{ setDiplomaView({ ...selected, _printMode:'template', _gabarit:'agrafe' }); setSelected(null); }}>🏅 Agrafe (template)</button>
+                    <button className="btn btn-orange btn-sm" onClick={()=>{ setDiplomaView({ ...selected, _printMode:'full', _gabarit:'agrafe' }); setSelected(null); }}>🏅 Agrafe PDF</button>
+                  </>}
                 </div>}
               </div>
             </div>}
@@ -3332,6 +3462,7 @@ export default function App() {
               <button className="btn btn-outline btn-sm" onClick={()=>setSelected(null)}>Fermer</button>
               {selected.statut==='brouillon'&&<button className="btn btn-orange btn-sm" onClick={()=>loadBrouillon(selected)}>✏️ Continuer la demande</button>}
               {canEdit(selected)&&<button className="btn btn-orange btn-sm" onClick={()=>loadEditReq(selected)}>✏️ Modifier la demande</button>}
+              {role==='gestion'&&<button className="btn btn-outline btn-sm" onClick={()=>openGEdit(selected)}>✏️ Corriger (FNPC)</button>}
               {canResubmit(selected)&&<button className="btn btn-orange btn-sm" onClick={()=>{ setResubmitModal(selected); setSelected(null); }}>↺ Resoumettre</button>}
               {canRefuse(selected)&&<button className="btn btn-danger btn-sm" onClick={()=>{ setRefuseModal(selected); setSelected(null); }}>✗ Refuser</button>}
               {canValAntenne(selected)&&<button className="btn btn-success btn-sm" onClick={()=>validateAntenne(selected.id)}>✓ Valider → APC</button>}
@@ -3446,7 +3577,62 @@ export default function App() {
         </div>
       )}
 
-      {diplomaView&&<DiplomaModal req={diplomaView} templates={diplomaTpl} tarif={tarif} onClose={()=>setDiplomaView(null)}/>}
+      {tourStep!==null && (TOUR_STEPS[role]||[]).length>0 && (() => {
+        const steps = TOUR_STEPS[role];
+        const idx = Math.min(tourStep, steps.length-1);
+        const s = steps[idx];
+        const last = idx >= steps.length-1;
+        return (
+          <div className="modal-overlay" style={{ zIndex:1000 }} onClick={closeTour}>
+            <div style={{ maxWidth:440, width:'100%', background:'white', borderRadius:18, overflow:'hidden', boxShadow:'0 20px 60px rgba(0,0,0,0.3)' }} onClick={e=>e.stopPropagation()}>
+              <div style={{ background:'#1B3764', padding:'22px 24px', textAlign:'center', borderBottom:'3px solid #E87722' }}>
+                <div style={{ fontSize:40, marginBottom:6 }}>{s.icon}</div>
+                <div style={{ color:'white', fontFamily:'Playfair Display,serif', fontWeight:700, fontSize:18 }}>{s.title}</div>
+              </div>
+              <div style={{ padding:'20px 24px' }}>
+                <p style={{ color:'#475569', fontSize:14, lineHeight:1.6, margin:0 }}>{s.body}</p>
+                <div style={{ display:'flex', justifyContent:'center', gap:6, margin:'18px 0' }}>
+                  {steps.map((_,i)=><span key={i} style={{ width:8, height:8, borderRadius:'50%', background:i===idx?'#E87722':'#e5e7eb' }}/>)}
+                </div>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8 }}>
+                  <button className="btn btn-outline btn-sm" onClick={closeTour}>Passer</button>
+                  <div style={{ display:'flex', gap:8 }}>
+                    {idx>0 && <button className="btn btn-outline btn-sm" onClick={()=>setTourStep(idx-1)}>Précédent</button>}
+                    {last
+                      ? <button className="btn btn-orange btn-sm" onClick={closeTour}>Terminer ✓</button>
+                      : <button className="btn btn-orange btn-sm" onClick={()=>setTourStep(idx+1)}>Suivant →</button>}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+      {diplomaView&&<DiplomaModal req={diplomaView} templates={diplomaTpl} agrafes={agrafes} tarif={tarif} onClose={()=>setDiplomaView(null)}/>}
+      {gEdit&&(
+        <div className="modal-overlay" onClick={()=>setGEdit(null)}>
+          <div style={{ maxWidth:560, width:'100%', background:'white', borderRadius:16, overflow:'hidden', maxHeight:'92vh', display:'flex', flexDirection:'column' }} onClick={e=>e.stopPropagation()}>
+            <div style={{ padding:'12px 18px', background:'#1B3764', display:'flex', justifyContent:'space-between', alignItems:'center', borderBottom:'2px solid #E87722' }}>
+              <span style={{ color:'#E87722', fontFamily:'Playfair Display,serif', fontWeight:700 }}>✏️ Correction FNPC — {gEdit.id}</span>
+              <button onClick={()=>setGEdit(null)} style={{ background:'rgba(255,255,255,0.1)', border:'none', color:'white', cursor:'pointer', borderRadius:6, padding:'5px 10px', fontSize:12 }}>✕</button>
+            </div>
+            <div style={{ padding:18, overflow:'auto' }}>
+              <div style={{ background:'#FFF4E8', border:'1px solid #E87722', borderRadius:8, padding:'8px 12px', marginBottom:14, fontSize:12, color:'#C45A00' }}>Correction directe par la Gestion FNPC — le statut du dossier ({STATUSES[gEdit.statut]?.label}) n'est pas modifié.</div>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+                <label className="fl">Prénom<input className="input" value={gPrenom} onChange={e=>setGPrenom(e.target.value)}/></label>
+                <label className="fl">Nom<input className="input" value={gNom} onChange={e=>setGNom(e.target.value)}/></label>
+              </div>
+              <label className="fl" style={{ marginTop:10, display:'block' }}>Distinction<select className="select" value={gMedal} onChange={e=>setGMedal(e.target.value)}>{medalTypes.map(m=><option key={m.id} value={m.id}>{m.label}</option>)}</select></label>
+              <label className="fl" style={{ marginTop:10, display:'block' }}>Département<select className="select" value={gDept} onChange={e=>setGDept(e.target.value)}>{DEPTS.map(d=><option key={d} value={d}>{d}</option>)}</select></label>
+              <label className="fl" style={{ marginTop:10, display:'block' }}>Motivations<textarea className="textarea" rows={5} value={gJust} onChange={e=>setGJust(e.target.value)}/></label>
+              <div style={{ display:'flex', gap:8, marginTop:14 }}>
+                <button className="btn btn-orange" onClick={saveGEdit} disabled={!gNom.trim()||!gPrenom.trim()}>💾 Enregistrer la correction</button>
+                <button className="btn btn-outline" onClick={()=>setGEdit(null)}>Annuler</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* TOAST */}
       {toast&&<div className="toast" style={{ background:toast.type==='err'?'#dc2626':'#059669' }}>{toast.type==='err'?'✗':'✓'} {toast.msg}</div>}
@@ -3517,18 +3703,19 @@ function diplomaDateFr(req) {
   catch { return new Date().toLocaleDateString('fr-FR'); }
 }
 
-function DiplomaModal({ req, templates, tarif, onClose }) {
+function DiplomaModal({ req, templates, agrafes, tarif, onClose }) {
   useEffect(() => { document.body.classList.add('diploma-printing'); return () => document.body.classList.remove('diploma-printing'); }, []);
   const printMode = req._printMode || 'full';
   const mode = printMode === 'template' ? 'preimprime' : 'complet';
-  const gabarit = MEDAL_TO_GABARIT[req.medalType.id] || 'medaille';
+  const gabarit = req._gabarit || MEDAL_TO_GABARIT[req.medalType.id] || 'medaille';
   const t = templates?.[gabarit];
+  const agrafeNom = (req.agrafeDepts || []).map(id => (agrafes||[]).find(a => a.id === id)?.nom).filter(Boolean).join(', ');
   const values = {
     niveau: req.medalType.shortLabel || '',
     nom: `${req.benevole.prenom} ${req.benevole.nom}`,
     date: diplomaDateFr(req),
     numero: req.diplomeId || '—',
-    agrafe: req.agrafe ? (req.agrafe.label || req.agrafe.shortLabel || 'Agrafe') : '',
+    agrafe: agrafeNom || '',
   };
   return (
     <div className="modal-overlay" onClick={onClose}>

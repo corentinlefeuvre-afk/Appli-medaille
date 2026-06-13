@@ -1,6 +1,6 @@
 {
   "name": "fnpc-medailles",
-  "version": "1.1.0",
+  "version": "1.2.1",
   "description": "Application de gestion des distinctions et médailles FNPC",
   "type": "module",
   "scripts": {
@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.107.0",
+    "docx": "^8.5.0",
     "nodemailer": "^6.9.14",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
