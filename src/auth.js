@@ -43,6 +43,7 @@ export const auth = {
       nom:      data.nom,
       prenom:   data.prenom,
       role:     data.role,
+      roles:    data.roles ? data.roles.split(',').map(s => s.trim()).filter(Boolean) : [data.role],
       dept:     data.dept,
       antenne:  data.antenne,
     };

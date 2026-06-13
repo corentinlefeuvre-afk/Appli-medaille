@@ -28,7 +28,7 @@ class ErrorBoundary extends React.Component {
 export { ErrorBoundary };
 
 const APP_TITLE   = "Demande Médaille FNPC";
-const APP_VERSION = "1.0.8";
+const APP_VERSION = "1.1.0";
 const USE_SUPABASE = true;
 
 // ── PrestaShop Webservice ────────────────────────────────────────────────────
@@ -321,7 +321,7 @@ const DEFAULT_DIPLOMA_TEMPLATES = {
     nom:{x:0,y:50.5,w:100,size:24,color:'#111111',align:'center'},
     date:{x:22.46,y:80.13,w:16,size:16,color:'#111111',align:'left'},
     numero:{x:28.98,y:90.24,w:24,size:12,color:'#111111',align:'left'} } },
-  agrafe:    { label:'Agrafe (pré-imprimé)', hasComplet:false, fields:{
+  agrafe:    { label:'Agrafe', hasComplet:true, fields:{
     niveau:{x:50.91,y:50,w:24.65,size:24,color:'#E8771F',align:'left'},
     nom:{x:0,y:57.86,w:100,size:24,color:'#111111',align:'center'},
     date:{x:21.32,y:81.43,w:16,size:16,color:'#111111',align:'left'},
@@ -332,7 +332,8 @@ const DIPLOMA_FIELD_LABELS = { niveau:'Échelon', nom:'Prénom + Nom', date:'Dat
 const MEDAL_TO_GABARIT = { temoignage:'temoignage', bronze:'medaille', argent:'medaille', vermeil:'medaille', grand_or:'medaille', gm_argent:'gm_argent', gm_or:'gm_or' };
 const DIPLOMA_SAMPLE = { niveau:'Bronze', nom:'Marie DUPONT', date:'12 juin 2026', numero:'FNPC-2026-075-0001', agrafe:'Agrafe Or' };
 const DIPLOMA_PAGE_W = 900; // largeur px de l'aperçu éditeur (A4 paysage)
-const ptToPx = (pt) => pt * DIPLOMA_PAGE_W / 841.68;
+const ptToPx = (pt, w=DIPLOMA_PAGE_W) => pt * w / 841.68;
+const FONT_OPTIONS = ['Arial','Helvetica','Times New Roman','Georgia','Garamond','Verdana','Trebuchet MS','Calibri','Courier New','Playfair Display'];
 
 // ─── CSS ───────────────────────────────────────────────────────────────────────
 
@@ -391,6 +392,19 @@ body{font-family:'Source Sans 3',sans-serif;font-size:17px}
 .checkbox-row{display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:6px;cursor:pointer;transition:background 0.1s}
 .checkbox-row:hover{background:#f8faff}
 input[type=checkbox]{width:16px;height:16px;accent-color:#E87722;cursor:pointer}
+/* Diplôme : aperçu réduit + impression A4 paysage */
+.diploma-print{width:696px;height:492px;position:relative;overflow:hidden;max-width:100%}
+.diploma-scale{position:absolute;top:0;left:0;transform:scale(0.6203);transform-origin:top left}
+.diploma-canvas{box-shadow:0 6px 24px rgba(0,0,0,.18)}
+@page diploma{size:A4 landscape;margin:0}
+@media print{
+  body.diploma-printing *{visibility:hidden !important}
+  body.diploma-printing .diploma-print, body.diploma-printing .diploma-print *{visibility:visible !important}
+  body.diploma-printing .diploma-print{position:fixed;left:0;top:0;width:auto;height:auto;overflow:visible;page:diploma}
+  body.diploma-printing .diploma-scale{position:static;transform:none}
+  body.diploma-printing .diploma-canvas{box-shadow:none}
+  body.diploma-printing .no-print{display:none !important}
+}
 `;
 
 // ─── LOGO FNPC ────────────────────────────────────────────────────────────────
@@ -2975,7 +2989,7 @@ export default function App() {
             style={{ position:'absolute', left:`${f.x}%`, top:`${f.y}%`, width:`${f.w}%`,
               fontSize:ptToPx(f.size), color:f.color, fontWeight:700, lineHeight:1, whiteSpace:'nowrap',
               display:'flex', justifyContent: f.align==='center' ? 'center' : 'flex-start',
-              fontFamily:'Arial, Helvetica, sans-serif',
+              fontFamily: (f.font || 'Arial') + ', Helvetica, sans-serif',
               cursor: editable ? 'move' : 'default',
               outline: editable ? (calField===k ? '2px dashed #E87722' : '1px dashed #cbd5e1') : 'none' }}>
             {values[k] ?? ''}
@@ -3024,6 +3038,7 @@ export default function App() {
               <label className="fl">Taille (pt)<input className="input" type="number" step="1" value={fld.size} onChange={e=>updateCalField(calGabarit,calField,{size:+e.target.value})}/></label>
               <label className="fl">Couleur<input className="input" type="color" value={fld.color} onChange={e=>updateCalField(calGabarit,calField,{color:e.target.value})} style={{ padding:2, height:38 }}/></label>
               <label className="fl">Alignement<select className="select" value={fld.align} onChange={e=>updateCalField(calGabarit,calField,{align:e.target.value})}><option value="left">Gauche</option><option value="center">Centre</option></select></label>
+              <label className="fl" style={{ gridColumn:'1 / 3' }}>Police<select className="select" value={fld.font || 'Arial'} onChange={e=>updateCalField(calGabarit,calField,{font:e.target.value})} style={{ fontFamily:(fld.font||'Arial')+',sans-serif' }}>{FONT_OPTIONS.map(f=><option key={f} value={f} style={{ fontFamily:f }}>{f}</option>)}</select></label>
             </div>}
             <p style={{ fontSize:11, color:'#94a3b8', marginTop:12 }}>Astuce : glisse directement le champ sur l'aperçu pour le positionner, puis affine au pixel ici.</p>
           </div>
@@ -3177,15 +3192,17 @@ export default function App() {
         </div>
         <div style={{ display:'flex', alignItems:'center', gap:8 }}>
           {USE_SUPABASE && <span style={{ background:dbConnected?'#d1fae5':'#fef9c3', color:dbConnected?'#059669':'#92400e', borderRadius:20, padding:'3px 9px', fontSize:12, fontWeight:700 }}>{dbConnected?'🟢 BD':'🟡 Démo'}</span>}
-          {/* Role selector: visible pour gestion (bascule entre niveaux) et mode démo */}
-          {(!authUser?.id || authUser?.id?.startsWith('demo-') || authUser?.role==='gestion') && <>
+          {/* Role selector: visible pour gestion, mode démo, et comptes multi-rôles */}
+          {(!authUser?.id || authUser?.id?.startsWith('demo-') || authUser?.role==='gestion' || (authUser?.roles && authUser.roles.length>1)) && <>
             <span style={{ fontSize:11, color:'#94a3b8' }}>Vue :</span>
           <select value={role} onChange={e=>{ setRole(e.target.value); setPage('dashboard'); setFilterStatus('all'); setFilterDept('all'); setSearch(''); setSelectedBatch([]); }}
             style={{ background:'rgba(255,255,255,0.1)', color:'white', border:'1px solid rgba(255,255,255,0.2)', fontSize:12, padding:'5px 9px', borderRadius:6 }}>
-            <option value="antenne" style={{ background:'#1B3764' }}>👤 Antenne — Paris 12e</option>
-            <option value="departement" style={{ background:'#1B3764' }}>🏢 APC — Paris 75</option>
-            <option value="commission" style={{ background:'#1B3764' }}>⚖️ Commission FNPC</option>
-            <option value="gestion" style={{ background:'#1B3764' }}>🏛 Gestion FNPC</option>
+            {(() => {
+              const all = ['antenne','departement','commission','gestion'];
+              const allowed = (authUser && authUser.id && !authUser.id.startsWith('demo-') && authUser.role!=='gestion' && authUser.roles && authUser.roles.length) ? authUser.roles : all;
+              const labels = { antenne:'👤 Antenne — Paris 12e', departement:'🏢 APC — Paris 75', commission:'⚖️ Commission FNPC', gestion:'🏛 Gestion FNPC' };
+              return allowed.map(r => <option key={r} value={r} style={{ background:'#1B3764' }}>{labels[r]||r}</option>);
+            })()}
           </select>
           </>}
           {role!=='antenne' && (stats.delayedDept>0||stats.delayedComm>0) && <span onClick={alertInfo?.action} style={{ background:'#ef4444', color:'white', borderRadius:20, padding:'2px 8px', fontSize:11, fontWeight:800, cursor:'pointer' }} title="Demandes en retard">⏰ {role==='departement'?stats.delayedDept:stats.delayedComm}</span>}
@@ -3429,7 +3446,7 @@ export default function App() {
         </div>
       )}
 
-      {diplomaView&&<DiplomaModal req={diplomaView} tarif={tarif} onClose={()=>setDiplomaView(null)}/>}
+      {diplomaView&&<DiplomaModal req={diplomaView} templates={diplomaTpl} tarif={tarif} onClose={()=>setDiplomaView(null)}/>}
 
       {/* TOAST */}
       {toast&&<div className="toast" style={{ background:toast.type==='err'?'#dc2626':'#059669' }}>{toast.type==='err'?'✗':'✓'} {toast.msg}</div>}
@@ -3471,113 +3488,66 @@ function ReqRow({ req, onSelect, showLate = true }) {
   );
 }
 
-// ─── DIPLÔME ───────────────────────────────────────────────────────────────────
 
-function DiplomaModal({ req, tarif, onClose }) {
-  const isGrande = req.medalType.category==='grande_medaille';
-  const isTemoignage = req.medalType.category==='temoignage';
-  const printMode = req._printMode || 'full';
-  const year = req.historique.find(h=>h.action==='Diplôme imprimé')?.date?.split('-')[0]||new Date().getFullYear();
-  const mc = req.medalType.color;
-  const dept = req.dept;
-
-  if (printMode === 'template') {
-    return (
-      <div className="modal-overlay" onClick={onClose}>
-        <div style={{ maxWidth:680, width:'100%', background:'white', borderRadius:16, overflow:'hidden', maxHeight:'90vh', overflowY:'auto' }} onClick={e=>e.stopPropagation()}>
-          <div style={{ padding:'12px 18px', background:'#1B3764', display:'flex', justifyContent:'space-between', alignItems:'center', borderBottom:'2px solid #E87722' }}>
-            <span style={{ color:'#E87722', fontFamily:'Playfair Display,serif', fontWeight:700 }}>📄 Template — {req.medalType.label} · {dept}</span>
-            <div style={{ display:'flex', gap:8 }}><button className="btn btn-orange btn-sm" onClick={()=>window.print()}>🖨 Imprimer</button><button onClick={onClose} style={{ background:'rgba(255,255,255,0.1)', border:'none', color:'white', cursor:'pointer', borderRadius:6, padding:'4px 10px', fontSize:12 }}>✕</button></div>
-          </div>
-          <div style={{ padding:28, fontFamily:'Playfair Display,serif' }}>
-            <h3 style={{ textAlign:'center', color:'#1B3764', marginBottom:24, fontSize:14, letterSpacing:'2px', textTransform:'uppercase' }}>Template impression — Diplôme pré-imprimé</h3>
-            {[['Distinction',req.medalType.label],['N° Diplôme',req.diplomeId],['Année',year],['Département',dept],['Prénom',req.benevole.prenom],['Nom',req.benevole.nom.toUpperCase()],['Ancienneté',`${req.benevole.ans} années de bénévolat`],['Antenne/APC',req.benevole.antenne||dept]].map(([l,v])=>(
-              <div key={l} style={{ display:'grid', gridTemplateColumns:'160px 1fr', gap:10, padding:'10px 0', borderBottom:'1px dashed #e5e7eb', alignItems:'center' }}>
-                <span style={{ fontSize:12, color:'#94a3b8', textTransform:'uppercase', letterSpacing:'0.5px' }}>{l}</span>
-                <div style={{ borderBottom:'1px solid #1B3764', padding:'4px 0', fontSize:15, fontWeight:700, color:'#1B3764', minHeight:26 }}>{v}</div>
-              </div>
-            ))}
-          </div>
+// Rendu d'un diplôme calibré (lecture seule) — A4 paysage à 96dpi (1122px)
+function renderDiplomaCanvas(templates, gabarit, mode, values) {
+  const W = 1122;
+  const t = templates?.[gabarit];
+  if (!t) return <div className="diploma-canvas" style={{ width:W, height:W*8.27/11.69, background:'#fff', display:'flex', alignItems:'center', justifyContent:'center', color:'#94a3b8' }}>Gabarit « {gabarit} » non défini</div>;
+  const showBg = mode === 'complet' && t.hasComplet;
+  return (
+    <div className="diploma-canvas" style={{ position:'relative', width:W, height:W*8.27/11.69,
+      background: showBg ? `#fff url(/diplomas/${gabarit}-complet.jpg) 0 0/100% 100% no-repeat` : '#fff' }}>
+      {Object.entries(t.fields).map(([k,f]) => (
+        <div key={k} style={{ position:'absolute', left:`${f.x}%`, top:`${f.y}%`, width:`${f.w}%`,
+          fontSize:ptToPx(f.size, W), color:f.color, fontWeight:700, lineHeight:1, whiteSpace:'nowrap',
+          display:'flex', justifyContent: f.align==='center' ? 'center' : 'flex-start',
+          fontFamily:(f.font||'Arial')+', Helvetica, sans-serif' }}>
+          {values[k] ?? ''}
         </div>
-      </div>
-    );
-  }
+      ))}
+    </div>
+  );
+}
 
+function diplomaDateFr(req) {
+  const h = req.historique?.find(x => /imprim|émis|emis/i.test(x.action || ''));
+  const d = h?.date ? new Date(h.date) : new Date();
+  try { return d.toLocaleDateString('fr-FR', { day:'numeric', month:'long', year:'numeric' }); }
+  catch { return new Date().toLocaleDateString('fr-FR'); }
+}
+
+function DiplomaModal({ req, templates, tarif, onClose }) {
+  useEffect(() => { document.body.classList.add('diploma-printing'); return () => document.body.classList.remove('diploma-printing'); }, []);
+  const printMode = req._printMode || 'full';
+  const mode = printMode === 'template' ? 'preimprime' : 'complet';
+  const gabarit = MEDAL_TO_GABARIT[req.medalType.id] || 'medaille';
+  const t = templates?.[gabarit];
+  const values = {
+    niveau: req.medalType.shortLabel || '',
+    nom: `${req.benevole.prenom} ${req.benevole.nom}`,
+    date: diplomaDateFr(req),
+    numero: req.diplomeId || '—',
+    agrafe: req.agrafe ? (req.agrafe.label || req.agrafe.shortLabel || 'Agrafe') : '',
+  };
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div style={{ maxWidth:780, width:'100%', background:'white', borderRadius:16, overflow:'hidden', maxHeight:'92vh', overflowY:'auto', display:'flex', flexDirection:'column' }} onClick={e=>e.stopPropagation()}>
-        <div style={{ padding:'12px 20px', background:'#1B3764', display:'flex', justifyContent:'space-between', alignItems:'center', flexShrink:0, borderBottom:'2px solid #E87722' }}>
-          <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-            <svg width={28} height={28} viewBox="0 0 100 100"><circle cx="50" cy="50" r="50" fill="#E87722"/><path d="M50 8 Q54 8 56.5 12.5 L93 76 Q95.5 80.5 93 85 Q90.5 89.5 85 89.5 L15 89.5 Q9.5 89.5 7 85 Q4.5 80.5 7 76 L43.5 12.5 Q46 8 50 8 Z" fill="white"/><path d="M50 30 Q53 30 54.5 33 L78 74 Q79.5 77 78 79.5 Q76.5 82 73.5 82 L26.5 82 Q23.5 82 22 79.5 Q20.5 77 22 74 L45.5 33 Q47 30 50 30 Z" fill="#1B3764"/></svg>
-            <div><div style={{ color:'#E87722', fontFamily:'Playfair Display,serif', fontWeight:700, fontSize:14 }}>{req.medalType.label} — {dept}</div><div style={{ color:'rgba(255,255,255,0.6)', fontSize:11 }}>N° {req.diplomeId}</div></div>
-          </div>
+      <div style={{ maxWidth:760, width:'100%', background:'white', borderRadius:16, overflow:'hidden', maxHeight:'92vh', display:'flex', flexDirection:'column' }} onClick={e=>e.stopPropagation()}>
+        <div className="no-print" style={{ padding:'12px 18px', background:'#1B3764', display:'flex', justifyContent:'space-between', alignItems:'center', borderBottom:'2px solid #E87722' }}>
+          <span style={{ color:'#E87722', fontFamily:'Playfair Display,serif', fontWeight:700, fontSize:14 }}>{mode==='complet'?'🎖 Diplôme complet':'📄 Pré-imprimé'} — {req.medalType.label}</span>
           <div style={{ display:'flex', gap:8 }}>
-            <button className="btn btn-orange btn-sm" onClick={()=>window.print()}>🖨 Imprimer</button>
+            <button className="btn btn-orange btn-sm" onClick={()=>window.print()}>{mode==='complet'?'🖨 Imprimer / PDF':'🖨 Imprimer'}</button>
             <button onClick={onClose} style={{ background:'rgba(255,255,255,0.1)', border:'none', color:'white', cursor:'pointer', borderRadius:6, padding:'5px 10px', fontSize:12 }}>✕</button>
           </div>
         </div>
-        <div style={{ padding:32, background:'#F4F1E8', flex:1 }}>
-          <div style={{ background:'white', padding:'42px 50px', position:'relative', fontFamily:'Playfair Display,serif',
-            border:isGrande?`3px double ${mc}`:`2px solid ${mc}`, boxShadow:`0 0 0 ${isGrande?8:5}px ${mc}18, 0 8px 40px rgba(0,0,0,0.1)` }}>
-            {[['top','left'],['top','right'],['bottom','left'],['bottom','right']].map(([v,h])=>(
-              <div key={v+h} style={{ position:'absolute', [v]:14, [h]:14, opacity:0.3 }}>
-                <svg width={isGrande?28:22} height={isGrande?28:22} viewBox="0 0 100 100"><circle cx="50" cy="50" r="50" fill="#E87722"/><path d="M50 8 Q54 8 56.5 12.5 L93 76 Q95.5 80.5 93 85 Q90.5 89.5 85 89.5 L15 89.5 Q9.5 89.5 7 85 Q4.5 80.5 7 76 L43.5 12.5 Q46 8 50 8 Z" fill="white"/><path d="M50 30 Q53 30 54.5 33 L78 74 Q79.5 77 78 79.5 Q76.5 82 73.5 82 L26.5 82 Q23.5 82 22 79.5 Q20.5 77 22 74 L45.5 33 Q47 30 50 30 Z" fill="#1B3764"/></svg>
-              </div>
-            ))}
-            <div style={{ background:'#1B3764', margin:'-42px -50px 30px', padding:'18px 50px', display:'flex', alignItems:'center', justifyContent:'center', gap:16 }}>
-              <svg width={46} height={46} viewBox="0 0 100 100"><circle cx="50" cy="50" r="50" fill="#E87722"/><path d="M50 8 Q54 8 56.5 12.5 L93 76 Q95.5 80.5 93 85 Q90.5 89.5 85 89.5 L15 89.5 Q9.5 89.5 7 85 Q4.5 80.5 7 76 L43.5 12.5 Q46 8 50 8 Z" fill="white"/><path d="M50 30 Q53 30 54.5 33 L78 74 Q79.5 77 78 79.5 Q76.5 82 73.5 82 L26.5 82 Q23.5 82 22 79.5 Q20.5 77 22 74 L45.5 33 Q47 30 50 30 Z" fill="#1B3764"/></svg>
-              <div style={{ textAlign:'center' }}>
-                <div style={{ color:'#E87722', fontSize:10, letterSpacing:'3px', textTransform:'uppercase', marginBottom:3 }}>Fédération Nationale de la</div>
-                <div style={{ color:'white', fontSize:20, fontWeight:700 }}>Protection Civile</div>
-                {isGrande&&<div style={{ color:'#E87722', fontSize:9, letterSpacing:'2.5px', marginTop:4 }}>★ GRANDE DISTINCTION FÉDÉRALE ★</div>}
-              </div>
-              <svg width={46} height={46} viewBox="0 0 100 100"><circle cx="50" cy="50" r="50" fill="#E87722"/><path d="M50 8 Q54 8 56.5 12.5 L93 76 Q95.5 80.5 93 85 Q90.5 89.5 85 89.5 L15 89.5 Q9.5 89.5 7 85 Q4.5 80.5 7 76 L43.5 12.5 Q46 8 50 8 Z" fill="white"/><path d="M50 30 Q53 30 54.5 33 L78 74 Q79.5 77 78 79.5 Q76.5 82 73.5 82 L26.5 82 Q23.5 82 22 79.5 Q20.5 77 22 74 L45.5 33 Q47 30 50 30 Z" fill="#1B3764"/></svg>
-            </div>
-            <div style={{ textAlign:'center', marginBottom:20 }}>
-              <div style={{ fontSize:10, color:'#94a3b8', letterSpacing:'3px', textTransform:'uppercase', marginBottom:7 }}>
-                {isGrande?'Grande Distinction':isTemoignage?'Attestation de Reconnaissance':'Diplôme Officiel'}
-              </div>
-              <div style={{ fontSize:isGrande?26:22, fontWeight:700, color:mc, lineHeight:1.2 }}>{req.medalType.label}{req.agrafe?' — Agrafe Exceptionnelle':''}</div>
-              <div style={{ marginTop:7, display:'flex', alignItems:'center', justifyContent:'center', gap:8 }}>
-                <div style={{ height:1, width:36, background:mc, opacity:0.5 }}/>
-                <div style={{ fontSize:11, color:'#64748b', letterSpacing:'0.8px' }}>Association Départementale · {dept}</div>
-                <div style={{ height:1, width:36, background:mc, opacity:0.5 }}/>
-              </div>
-            </div>
-            <div style={{ textAlign:'center', marginBottom:18 }}>
-              <div style={{ display:'inline-flex', width:isGrande?76:66, height:isGrande?76:66, borderRadius:'50%', alignItems:'center', justifyContent:'center', fontSize:isGrande?34:28, background:`radial-gradient(circle,${mc}cc,${mc}44)`, boxShadow:`0 4px 18px ${mc}55` }}>
-                {isGrande?'🏅':isTemoignage?'📜':'🎖'}
-              </div>
-            </div>
-            <div style={{ textAlign:'center', marginBottom:22, lineHeight:2 }}>
-              <div style={{ color:'#64748b', fontSize:13 }}>La Fédération Nationale de la Protection Civile</div>
-              <div style={{ color:'#64748b', fontSize:13 }}>{isTemoignage?'atteste de la reconnaissance envers':'décerne la présente distinction à'}</div>
-              <div style={{ fontSize:isGrande?28:24, fontWeight:700, color:'#1B3764', margin:'6px 0' }}>{req.benevole.prenom} {req.benevole.nom.toUpperCase()}</div>
-              <div style={{ color:'#64748b', fontSize:12 }}>{req.benevole.antenne?`de l'${req.benevole.antenne}`:`de l'Association Départementale de ${dept}`}</div>
-              {req.benevole.fonctions&&<div style={{ color:'#94a3b8', fontSize:11, fontStyle:'italic' }}>{req.benevole.fonctions}</div>}
-              <div style={{ color:'#64748b', fontSize:13, marginTop:7 }}>en reconnaissance de <strong style={{ color:'#1B3764' }}>{req.benevole.ans} années de bénévolat dévoué</strong></div>
-              <div style={{ color:'#64748b', fontSize:12 }}>au service de la Protection Civile et de nos concitoyens</div>
-            </div>
-            <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:8, background:'#f8faff', padding:'10px 14px', borderRadius:8, marginBottom:22, textAlign:'center', borderTop:`2px solid ${mc}22`, borderBottom:`2px solid ${mc}22` }}>
-              {[{l:'N° Diplôme',v:req.diplomeId,mono:true},{l:'Distinction',v:req.medalType.shortLabel},{l:'Année',v:year},{l:'Dpt.',v:dept.split(' - ')[0]||dept}].map(c=>(
-                <div key={c.l}><div style={{ fontSize:9, color:'#94a3b8', letterSpacing:'1px', textTransform:'uppercase', marginBottom:3 }}>{c.l}</div><div style={{ fontWeight:700, fontFamily:c.mono?'monospace':'Playfair Display,serif', color:c.mono?'#E87722':'#1B3764', fontSize:c.mono?11:12 }}>{c.v}</div></div>
-              ))}
-            </div>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:50 }}>
-              {['Le Président Départemental','Le Président de la Fédération Nationale'].map((title,i)=>(
-                <div key={i} style={{ textAlign:'center' }}>
-                  <div style={{ height:40, borderBottom:'1px solid #e5e7eb', marginBottom:6, display:'flex', alignItems:'flex-end', justifyContent:'center', color:mc, fontFamily:'Georgia,serif', fontSize:20, fontStyle:'italic', paddingBottom:3, opacity:0.4 }}>{i===0?'~~~~':'≈≈≈≈'}</div>
-                  <div style={{ fontSize:10, color:'#94a3b8' }}>{title}</div>
-                </div>
-              ))}
-            </div>
-            <div style={{ textAlign:'center', borderTop:'1px solid #f1f5f9', paddingTop:12, marginTop:18, display:'flex', alignItems:'center', justifyContent:'center', gap:10 }}>
-              <svg width={16} height={16} viewBox="0 0 100 100"><circle cx="50" cy="50" r="50" fill="#E87722"/><path d="M50 8 Q54 8 56.5 12.5 L93 76 Q95.5 80.5 93 85 Q90.5 89.5 85 89.5 L15 89.5 Q9.5 89.5 7 85 Q4.5 80.5 7 76 L43.5 12.5 Q46 8 50 8 Z" fill="white"/><path d="M50 30 Q53 30 54.5 33 L78 74 Q79.5 77 78 79.5 Q76.5 82 73.5 82 L26.5 82 Q23.5 82 22 79.5 Q20.5 77 22 74 L45.5 33 Q47 30 50 30 Z" fill="#1B3764"/></svg>
-              <div style={{ fontSize:9, color:'#c4c9d4', letterSpacing:'1.5px' }}>FÉDÉRATION NATIONALE DE LA PROTECTION CIVILE — DEPUIS 1965</div>
-              <div style={{ fontSize:9, color:'#475569', marginTop:3, letterSpacing:'0.5px' }}>v{APP_VERSION}</div>
-              <svg width={16} height={16} viewBox="0 0 100 100"><circle cx="50" cy="50" r="50" fill="#E87722"/><path d="M50 8 Q54 8 56.5 12.5 L93 76 Q95.5 80.5 93 85 Q90.5 89.5 85 89.5 L15 89.5 Q9.5 89.5 7 85 Q4.5 80.5 7 76 L43.5 12.5 Q46 8 50 8 Z" fill="white"/><path d="M50 30 Q53 30 54.5 33 L78 74 Q79.5 77 78 79.5 Q76.5 82 73.5 82 L26.5 82 Q23.5 82 22 79.5 Q20.5 77 22 74 L45.5 33 Q47 30 50 30 Z" fill="#1B3764"/></svg>
+        <div style={{ padding:18, background:'#eef2f7', overflow:'auto' }}>
+          <div className="diploma-print">
+            <div className="diploma-scale">
+              {renderDiplomaCanvas(templates, gabarit, mode, values)}
             </div>
           </div>
+          {mode==='complet' && !t?.hasComplet && <p className="no-print" style={{ fontSize:12, color:'#b45309', marginTop:10 }}>⚠️ Ce gabarit n'a pas de fond « complet » — bascule en pré-imprimé.</p>}
+          <p className="no-print" style={{ fontSize:11, color:'#94a3b8', marginTop:10 }}>Positions issues du Calibrage diplômes. {mode==='complet'?'« Imprimer / PDF » → choisis « Enregistrer en PDF » et orientation Paysage dans le dialogue.':'À imprimer sur le diplôme pré-imprimé (orientation Paysage).'}</p>
         </div>
       </div>
     </div>
