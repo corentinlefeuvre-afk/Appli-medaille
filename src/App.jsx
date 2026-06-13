@@ -28,7 +28,7 @@ class ErrorBoundary extends React.Component {
 export { ErrorBoundary };
 
 const APP_TITLE   = "Demande Médaille FNPC";
-const APP_VERSION = "1.0.3";
+const APP_VERSION = "1.0.8";
 const USE_SUPABASE = true;
 
 // ── PrestaShop Webservice ────────────────────────────────────────────────────
@@ -301,6 +301,39 @@ const DEFAULT_EMAIL_TEMPLATES = {
   paiement_temoignage: { sujet:'[FNPC] Paiement témoignage reçu — {prenom} {nom}',                    corps:'Bonjour,\n\nLe paiement de {tarif}€ pour le témoignage de {prenom} {nom} a bien été reçu le {date}.\n\nCordialement,\nFédération Nationale de la Protection Civile' },
 };
 
+// ─── GABARITS DIPLÔMES (positions calibrables) ──────────────────────────────────
+// Positions en % de la page A4 paysage. Fonds dans public/diplomas/<gabarit>-complet.jpg
+const DEFAULT_DIPLOMA_TEMPLATES = {
+  medaille:  { label:'Médaille (Bronze/Argent/Vermeil/Grand Or)', hasComplet:true, fields:{
+    niveau:{x:52.7,y:53.2,w:25.4,size:24,color:'#E8771F',align:'left'},
+    nom:{x:0,y:60.4,w:100,size:24,color:'#111111',align:'center'},
+    date:{x:26.4,y:82.6,w:18,size:14,color:'#111111',align:'left'},
+    numero:{x:34.6,y:94.3,w:24,size:12,color:'#111111',align:'left'} } },
+  gm_argent: { label:'Grande Médaille — Échelon Argent', hasComplet:true, fields:{
+    nom:{x:0,y:57.86,w:100,size:24,color:'#111111',align:'center'},
+    date:{x:22.36,y:80.14,w:16,size:16,color:'#111111',align:'left'},
+    numero:{x:29.23,y:90.24,w:24,size:12,color:'#111111',align:'left'} } },
+  gm_or:     { label:'Grande Médaille — Échelon Or', hasComplet:true, fields:{
+    nom:{x:0,y:57.86,w:100,size:24,color:'#111111',align:'center'},
+    date:{x:22.35,y:80.12,w:16,size:16,color:'#111111',align:'left'},
+    numero:{x:29.21,y:90.25,w:24,size:12,color:'#111111',align:'left'} } },
+  temoignage:{ label:'Témoignage de Reconnaissance', hasComplet:true, fields:{
+    nom:{x:0,y:50.5,w:100,size:24,color:'#111111',align:'center'},
+    date:{x:22.46,y:80.13,w:16,size:16,color:'#111111',align:'left'},
+    numero:{x:28.98,y:90.24,w:24,size:12,color:'#111111',align:'left'} } },
+  agrafe:    { label:'Agrafe (pré-imprimé)', hasComplet:false, fields:{
+    niveau:{x:50.91,y:50,w:24.65,size:24,color:'#E8771F',align:'left'},
+    nom:{x:0,y:57.86,w:100,size:24,color:'#111111',align:'center'},
+    date:{x:21.32,y:81.43,w:16,size:16,color:'#111111',align:'left'},
+    numero:{x:28.98,y:92.19,w:24,size:12,color:'#111111',align:'left'},
+    agrafe:{x:30.45,y:65.86,w:39,size:24,color:'#E8771F',align:'left'} } },
+};
+const DIPLOMA_FIELD_LABELS = { niveau:'Échelon', nom:'Prénom + Nom', date:'Date', numero:'Numéro', agrafe:'Agrafe' };
+const MEDAL_TO_GABARIT = { temoignage:'temoignage', bronze:'medaille', argent:'medaille', vermeil:'medaille', grand_or:'medaille', gm_argent:'gm_argent', gm_or:'gm_or' };
+const DIPLOMA_SAMPLE = { niveau:'Bronze', nom:'Marie DUPONT', date:'12 juin 2026', numero:'FNPC-2026-075-0001', agrafe:'Agrafe Or' };
+const DIPLOMA_PAGE_W = 900; // largeur px de l'aperçu éditeur (A4 paysage)
+const ptToPx = (pt) => pt * DIPLOMA_PAGE_W / 841.68;
+
 // ─── CSS ───────────────────────────────────────────────────────────────────────
 
 const CSS = `
@@ -418,6 +451,10 @@ export default function App() {
         if (welcome_cfg) setWelcomeMessages(welcome_cfg);
         const deptDisabled_cfg = await db.loadConfig('dept_disabled');
         if (deptDisabled_cfg) setDeptDisabled(deptDisabled_cfg);
+        const emailTpl_cfg = await db.loadConfig('email_templates');
+        if (emailTpl_cfg) setEmailTemplates({ ...DEFAULT_EMAIL_TEMPLATES, ...emailTpl_cfg }); // merge : on garde les nouveaux modèles par défaut
+        const dipTpl_cfg = await db.loadConfig('diploma_templates');
+        if (dipTpl_cfg) setDiplomaTpl({ ...DEFAULT_DIPLOMA_TEMPLATES, ...dipTpl_cfg });
         const depts_cfg = await db.loadDepartments();
         if (depts_cfg && Object.keys(depts_cfg).length > 0) setDeptAddresses(depts_cfg);
         setDbConnected(true);
@@ -452,6 +489,8 @@ export default function App() {
   const [refuseComment, setRefuseComment] = useState('');
   const [resubmitModal, setResubmitModal] = useState(null);
   const [emailModal, setEmailModal] = useState(null);
+  const [emailSendState, setEmailSendState] = useState('idle'); // idle | sending | sent | error
+  const [emailSendErr, setEmailSendErr] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
   const [filterDept, setFilterDept]   = useState('all');
   const [search, setSearch]         = useState('');
@@ -552,6 +591,25 @@ export default function App() {
 
   // ── Sync effects (must come after all useState declarations) ──
   useEffect(() => { const t = emailTemplates[emKey]; if(t){ setEmSujet(t.sujet); setEmCorps(t.corps); } }, [emKey]);
+  // Réinitialise l'état d'envoi quand on ouvre/ferme la modale e-mail
+  useEffect(() => { setEmailSendState('idle'); setEmailSendErr(''); }, [emailModal]);
+  // Envoi réel via la fonction Netlify SMTP
+  const sendEmailNow = async () => {
+    if (!emailModal?.destinataire) { setEmailSendState('error'); setEmailSendErr('Aucun destinataire.'); return; }
+    setEmailSendState('sending'); setEmailSendErr('');
+    try {
+      const res = await fetch('/.netlify/functions/send-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to: emailModal.destinataire, subject: emailModal.sujet, body: emailModal.corps }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error(data.error || ('HTTP ' + res.status));
+      setEmailSendState('sent');
+    } catch (e) {
+      setEmailSendState('error'); setEmailSendErr(e.message);
+    }
+  };
   useEffect(() => {
     if (page === 'adresse') {
       const dept = ROLES[role]?.dept || '75 - Paris Seine';
@@ -579,6 +637,11 @@ export default function App() {
       prestashop.getProductByRef('DiplomeReco').then(prod => {
         if (prod?.id) setPsProductId(prod.id);
       }).catch(() => {});
+    }
+    // Journal d'audit : chargement à l'ouverture de la page
+    if (page === 'audit') {
+      setAuditLoading(true);
+      db.loadAuditLog(null, 200).then(rows => setAuditLog(rows || [])).finally(() => setAuditLoading(false));
     }
     // APC default: arrive on demandes with soumis filter (only if no explicit filter set)
     if (page === 'demandes' && role === 'departement' && filterStatus === 'all') {
@@ -904,6 +967,18 @@ export default function App() {
 
   const DRAFT_KEY = 'fnpc_draft_demande';
   const [draftSavedAt, setDraftSavedAt] = useState(null); // horodatage du brouillon courant (pilote le bandeau)
+  // Journal d'audit (lecture seule)
+  const [auditLog, setAuditLog] = useState([]);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditFilterAction, setAuditFilterAction] = useState('');
+  const [auditSearch, setAuditSearch] = useState('');
+  // Gabarits diplômes + calibrage
+  const [diplomaTpl, setDiplomaTpl] = useState(DEFAULT_DIPLOMA_TEMPLATES);
+  const [calGabarit, setCalGabarit] = useState('medaille');
+  const [calMode, setCalMode] = useState('complet');
+  const [calField, setCalField] = useState('nom');
+  const calPageRef = useRef(null);
+  const calDrag = useRef(null);
   const autosaveDraft = () => {
     if (!nrNom && !nrPrenom && !nrMedal) return; // Ne pas sauver un brouillon vide
     const payload = { nrNom, nrPrenom, nrAdhesion, nrGenre, nrAnnee, nrMedal, nrJust, nrFonctions, nrDistinctions, nrDateRecep, nrEmail, nrNotif, nrCommentaire, nrDept, nrDemandeur, nrAgrafe, nrAgrafeDepts, savedAt: new Date().toISOString() };
@@ -1075,6 +1150,8 @@ export default function App() {
       case 'email_templates':   return EmailTemplatesPage();
       case 'statistiques':      return StatistiquesPage();
       case 'prestashop':        return PrestashopPage();
+      case 'audit':             return AuditPage();
+      case 'calibrage_diplomes': return CalibrageDiplomesPage();
       case 'mon_compte':        return MonComptePage();
       case 'medailles':         return MedaillesPage();
       case 'import_excel':      return ImportExcelPage();
@@ -1358,6 +1435,26 @@ export default function App() {
   function StatistiquesPage() {
     const years = [...new Set(allForRole.map(r=>r.dateCreation?.slice(0,4)).filter(Boolean))].sort().reverse();
     const data = dashYear==='all' ? allForRole : allForRole.filter(r=>r.dateCreation?.startsWith(dashYear));
+    // Délai moyen de traitement : création -> dernière action de l'historique
+    const delays = data.map(r => {
+      const hist = Array.isArray(r.historique) ? r.historique : [];
+      const last = hist.length ? hist[hist.length-1]?.date : null;
+      if (!r.dateCreation || !last) return null;
+      const d = Math.floor((new Date(last) - new Date(r.dateCreation)) / 86400000);
+      return d >= 0 ? d : null;
+    }).filter(d => d != null);
+    const avgDelay = delays.length ? Math.round(delays.reduce((a,b)=>a+b,0)/delays.length) : null;
+    const refusCount = data.filter(r=>['refuse_dept','refuse_federation'].includes(r.statut)).length;
+    // Volumes par département
+    const deptMap = {};
+    data.forEach(r => { const d = r.dept || '—'; deptMap[d] = (deptMap[d]||0)+1; });
+    const byDeptStat = Object.entries(deptMap).map(([dept,count])=>({dept,count})).sort((a,b)=>b.count-a.count);
+    const maxDept = Math.max(...byDeptStat.map(d=>d.count), 1);
+    // Évolution par mois (12 derniers)
+    const monthMap = {};
+    data.forEach(r => { const m = r.dateCreation?.slice(0,7); if(m) monthMap[m]=(monthMap[m]||0)+1; });
+    const byMonth = Object.entries(monthMap).map(([month,count])=>({month,count})).sort((a,b)=>a.month.localeCompare(b.month)).slice(-12);
+    const maxMonth = Math.max(...byMonth.map(m=>m.count), 1);
     const byMedal = medalTypes.map(m => ({ label:m.shortLabel, count:data.filter(r=>r.medalType.id===m.id).length, color:m.color }));
     const hommes = data.filter(r=>r.benevole.genre==='M').length;
     const femmes = data.filter(r=>r.benevole.genre==='F').length;
@@ -1417,6 +1514,65 @@ export default function App() {
             </div>
           ))}
         </div>
+
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(110px,1fr))', gap:12, margin:'14px 0' }}>
+          {[
+            { l:'Total', v:data.length, c:'#1B3764' },
+            { l:'En cours', v:data.filter(r=>['soumis_antenne','soumis','pret_commission','en_commission','valide_federation'].includes(r.statut)).length, c:'#3b82f6' },
+            { l:'Émises', v:data.filter(r=>['diplome_emis','expedie'].includes(r.statut)).length, c:'#059669' },
+            { l:'Refusées', v:refusCount, c:'#dc2626' },
+            { l:'Taux de refus', v:(data.length?Math.round(refusCount/data.length*100):0)+'%', c:'#dc2626' },
+            { l:'Délai moyen', v:(avgDelay!=null?avgDelay+' j':'—'), c:'#E87722' },
+          ].map(k=>(
+            <div key={k.l} className="card" style={{ textAlign:'center', padding:'14px 10px' }}>
+              <div style={{ fontSize:24, fontWeight:800, color:k.c, fontFamily:'Playfair Display,serif' }}>{k.v}</div>
+              <div style={{ fontSize:11, color:'#64748b', marginTop:2 }}>{k.l}</div>
+            </div>
+          ))}
+        </div>
+
+        <div className="card" style={{ marginBottom:14 }}>
+          <h2 style={H2}>Répartition par statut</h2>
+          {Object.keys(STATUSES).map(st=>({ st, count:data.filter(r=>r.statut===st).length })).filter(x=>x.count>0).map(({st,count})=>(
+            <div key={st} style={{ display:'flex', alignItems:'center', gap:8, marginBottom:7 }}>
+              <span style={{ fontSize:12, color:'#64748b', width:160, flexShrink:0 }}>{STATUSES[st]?.label||st}</span>
+              <div style={{ flex:1, background:'#e5e7eb', borderRadius:4, height:14 }}>
+                <div style={{ width:`${count/(data.length||1)*100}%`, height:'100%', background:STATUSES[st]?.color||'#1B3764', borderRadius:4 }}/>
+              </div>
+              <span style={{ fontSize:12, fontWeight:700, color:'#1B3764', width:24 }}>{count}</span>
+            </div>
+          ))}
+        </div>
+
+        {role==='gestion' && byDeptStat.length>0 && (
+        <div className="card" style={{ marginBottom:14 }}>
+          <h2 style={H2}>Volumes par département</h2>
+          {byDeptStat.map(({dept,count})=>(
+            <div key={dept} style={{ display:'flex', alignItems:'center', gap:8, marginBottom:7 }}>
+              <span style={{ fontSize:12, color:'#64748b', width:160, flexShrink:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{dept}</span>
+              <div style={{ flex:1, background:'#e5e7eb', borderRadius:4, height:14 }}>
+                <div style={{ width:`${count/maxDept*100}%`, height:'100%', background:'#1B3764', borderRadius:4 }}/>
+              </div>
+              <span style={{ fontSize:12, fontWeight:700, color:'#1B3764', width:24 }}>{count}</span>
+            </div>
+          ))}
+        </div>
+        )}
+
+        {byMonth.length>0 && (
+        <div className="card">
+          <h2 style={H2}>Évolution (12 derniers mois)</h2>
+          <div style={{ display:'flex', alignItems:'flex-end', gap:6, height:120, marginTop:10 }}>
+            {byMonth.map(({month,count})=>(
+              <div key={month} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:4 }}>
+                <div style={{ fontSize:11, fontWeight:700, color:'#1B3764' }}>{count||''}</div>
+                <div style={{ width:'100%', background:'#E87722', borderRadius:'4px 4px 0 0', height:`${count/maxMonth*80}px`, minHeight:count?4:0 }}/>
+                <div style={{ fontSize:10, color:'#94a3b8', whiteSpace:'nowrap' }}>{month.slice(2)}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+        )}
       </div>
     );
   }
@@ -1985,7 +2141,19 @@ export default function App() {
   }
 
   function EmailTemplatesPage() {
-    const save = () => { setEmailTemplates(p=>({ ...p, [emKey]:{ sujet:emSujet, corps:emCorps } })); fire('Modèle enregistré ✓'); };
+    const save = () => {
+      const next = { ...emailTemplates, [emKey]:{ sujet:emSujet, corps:emCorps } };
+      setEmailTemplates(next);
+      db.saveConfig('email_templates', next); // persistance cross-session
+      fire('Modèle enregistré ✓');
+    };
+    // Aperçu : substitution avec des données d'exemple
+    const sample = { prenom:'Marie', nom:'Dupont', distinction:'Médaille Échelon Bronze', date:today(), numero:'FNPC-2025-075-0001', motif:'Dossier incomplet', tarif:tarif };
+    const fill = (s) => (s||'')
+      .replace(/{prenom}/g, sample.prenom).replace(/{nom}/g, sample.nom)
+      .replace(/{distinction}/g, sample.distinction).replace(/{date}/g, sample.date)
+      .replace(/{numero}/g, sample.numero).replace(/{motif}/g, sample.motif)
+      .replace(/{tarif}/g, sample.tarif).replace(/{temoignagePaiement}/g, '');
 
     // Map each email key to its niveau and label
     const EMAIL_META = [
@@ -2054,6 +2222,15 @@ export default function App() {
           <div style={{ display:'flex', gap:8 }}>
             <button className="btn btn-orange" onClick={save}>💾 Enregistrer</button>
             <button className="btn btn-outline btn-sm" onClick={()=>{ const t=DEFAULT_EMAIL_TEMPLATES[emKey]; setEmSujet(t.sujet); setEmCorps(t.corps); }}>↺ Réinitialiser par défaut</button>
+          </div>
+          <div style={{ marginTop:16, border:'1px solid #e5e7eb', borderRadius:8, overflow:'hidden' }}>
+            <div style={{ background:'#f8faff', padding:'8px 14px', fontSize:12, fontWeight:700, color:'#1B3764', borderBottom:'1px solid #e5e7eb' }}>👁 Aperçu (données d'exemple)</div>
+            <div style={{ padding:'12px 14px' }}>
+              <div style={{ fontSize:11, color:'#94a3b8' }}>Objet</div>
+              <div style={{ fontSize:13, fontWeight:700, color:'#1B3764', marginBottom:10 }}>{fill(emSujet)}</div>
+              <div style={{ fontSize:11, color:'#94a3b8' }}>Message</div>
+              <div style={{ whiteSpace:'pre-wrap', fontSize:13, color:'#374151', lineHeight:1.6 }}>{fill(emCorps)}</div>
+            </div>
           </div>
         </div>
       </div>
@@ -2758,12 +2935,164 @@ export default function App() {
     );
   }
 
+  // ── Calibrage diplômes ──
+  const startCalDrag = (e, gab, field) => {
+    e.preventDefault();
+    setCalField(field);
+    const f = diplomaTpl[gab].fields[field];
+    calDrag.current = { gab, field, mx:e.clientX, my:e.clientY, fx:f.x, fy:f.y };
+  };
+  const calDragMove = (e) => {
+    if (!calDrag.current || !calPageRef.current) return;
+    const rect = calPageRef.current.getBoundingClientRect();
+    const dx = (e.clientX - calDrag.current.mx)/rect.width*100;
+    const dy = (e.clientY - calDrag.current.my)/rect.height*100;
+    const { gab, field, fx, fy } = calDrag.current;
+    const nx = Math.max(0, Math.min(100, +(fx+dx).toFixed(2)));
+    const ny = Math.max(0, Math.min(100, +(fy+dy).toFixed(2)));
+    setDiplomaTpl(p => ({ ...p, [gab]:{ ...p[gab], fields:{ ...p[gab].fields, [field]:{ ...p[gab].fields[field], x:nx, y:ny } } } }));
+  };
+  const endCalDrag = () => { calDrag.current = null; };
+  const updateCalField = (gab, field, patch) => setDiplomaTpl(p => ({ ...p, [gab]:{ ...p[gab], fields:{ ...p[gab].fields, [field]:{ ...p[gab].fields[field], ...patch } } } }));
+  const saveDiplomaTpl = () => { db.saveConfig('diploma_templates', diplomaTpl); fire('Positions des diplômes enregistrées ✓'); };
+
+  // Rendu d'un diplôme (utilisé par l'éditeur de calibrage et l'aperçu)
+  const diplomaBox = (gab, mode, values, editable) => {
+    const t = diplomaTpl[gab];
+    if (!t) return null;
+    const showBg = mode === 'complet' && t.hasComplet;
+    return (
+      <div ref={editable ? calPageRef : null}
+        onMouseMove={editable ? calDragMove : undefined}
+        onMouseUp={editable ? endCalDrag : undefined}
+        onMouseLeave={editable ? endCalDrag : undefined}
+        style={{ position:'relative', width:DIPLOMA_PAGE_W, height:DIPLOMA_PAGE_W*8.27/11.69,
+          background: showBg ? `#fff url(/diplomas/${gab}-complet.jpg) 0 0/100% 100% no-repeat` : '#fff',
+          border:'1px solid #e2e8f0', userSelect:'none', flexShrink:0 }}>
+        {Object.entries(t.fields).map(([k,f]) => (
+          <div key={k}
+            onMouseDown={editable ? (e)=>startCalDrag(e, gab, k) : undefined}
+            style={{ position:'absolute', left:`${f.x}%`, top:`${f.y}%`, width:`${f.w}%`,
+              fontSize:ptToPx(f.size), color:f.color, fontWeight:700, lineHeight:1, whiteSpace:'nowrap',
+              display:'flex', justifyContent: f.align==='center' ? 'center' : 'flex-start',
+              fontFamily:'Arial, Helvetica, sans-serif',
+              cursor: editable ? 'move' : 'default',
+              outline: editable ? (calField===k ? '2px dashed #E87722' : '1px dashed #cbd5e1') : 'none' }}>
+            {values[k] ?? ''}
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  function CalibrageDiplomesPage() {
+    const t = diplomaTpl[calGabarit] || {};
+    const mode = t.hasComplet ? calMode : 'preimprime';
+    const fkeys = Object.keys(t.fields || {});
+    const fld = t.fields?.[calField];
+    return (
+      <div>
+        <h1 style={H1}>Calibrage des diplômes</h1>
+        <p style={{ color:'#64748b', fontSize:13, marginBottom:14 }}>Glisse chaque champ sur l'aperçu (ou ajuste les valeurs), puis enregistre. <b>Complet</b> = avec le fond (pour l'e-mail) · <b>Pré-imprimé</b> = texte seul (impression sur ton papier décoré).</p>
+        <div className="card no-print" style={{ marginBottom:12, display:'flex', gap:8, flexWrap:'wrap', alignItems:'center' }}>
+          {Object.keys(diplomaTpl).map(g => (
+            <button key={g} className={`tab ${calGabarit===g?'active':''}`} style={{ fontSize:12 }}
+              onClick={()=>{ setCalGabarit(g); setCalField(Object.keys(diplomaTpl[g].fields)[0]); if(!diplomaTpl[g].hasComplet) setCalMode('preimprime'); }}>
+              {diplomaTpl[g].label || g}
+            </button>
+          ))}
+        </div>
+        <div className="no-print" style={{ display:'flex', gap:8, marginBottom:10, alignItems:'center', flexWrap:'wrap' }}>
+          {t.hasComplet && <>
+            <button className={`tab ${mode==='complet'?'active':''}`} onClick={()=>setCalMode('complet')}>Complet (fond)</button>
+            <button className={`tab ${mode==='preimprime'?'active':''}`} onClick={()=>setCalMode('preimprime')}>Pré-imprimé</button>
+          </>}
+          <button className="btn btn-orange btn-sm" style={{ marginLeft:'auto' }} onClick={saveDiplomaTpl}>💾 Enregistrer</button>
+          <button className="btn btn-outline btn-sm" onClick={()=>{ if(confirm('Réinitialiser ce gabarit aux positions par défaut ?')) setDiplomaTpl(p=>({ ...p, [calGabarit]:JSON.parse(JSON.stringify(DEFAULT_DIPLOMA_TEMPLATES[calGabarit])) })); }}>↺ Défaut</button>
+        </div>
+        <div style={{ display:'flex', gap:16, flexWrap:'wrap', alignItems:'flex-start' }}>
+          <div className="dip-print">{diplomaBox(calGabarit, mode, DIPLOMA_SAMPLE, true)}</div>
+          <div className="card no-print" style={{ minWidth:240, flex:1 }}>
+            <div className="st">Champs</div>
+            <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:14 }}>
+              {fkeys.map(k => <button key={k} className={`tab ${calField===k?'active':''}`} style={{ fontSize:12 }} onClick={()=>setCalField(k)}>{DIPLOMA_FIELD_LABELS[k]||k}</button>)}
+            </div>
+            {fld && <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+              <label className="fl">X %<input className="input" type="number" step="0.5" value={fld.x} onChange={e=>updateCalField(calGabarit,calField,{x:+e.target.value})}/></label>
+              <label className="fl">Y %<input className="input" type="number" step="0.5" value={fld.y} onChange={e=>updateCalField(calGabarit,calField,{y:+e.target.value})}/></label>
+              <label className="fl">Largeur %<input className="input" type="number" step="1" value={fld.w} onChange={e=>updateCalField(calGabarit,calField,{w:+e.target.value})}/></label>
+              <label className="fl">Taille (pt)<input className="input" type="number" step="1" value={fld.size} onChange={e=>updateCalField(calGabarit,calField,{size:+e.target.value})}/></label>
+              <label className="fl">Couleur<input className="input" type="color" value={fld.color} onChange={e=>updateCalField(calGabarit,calField,{color:e.target.value})} style={{ padding:2, height:38 }}/></label>
+              <label className="fl">Alignement<select className="select" value={fld.align} onChange={e=>updateCalField(calGabarit,calField,{align:e.target.value})}><option value="left">Gauche</option><option value="center">Centre</option></select></label>
+            </div>}
+            <p style={{ fontSize:11, color:'#94a3b8', marginTop:12 }}>Astuce : glisse directement le champ sur l'aperçu pour le positionner, puis affine au pixel ici.</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function AuditPage() {
+    const actions = [...new Set(auditLog.map(a => a.action).filter(Boolean))].sort();
+    const q = auditSearch.trim().toLowerCase();
+    const rows = auditLog.filter(a => {
+      if (auditFilterAction && a.action !== auditFilterAction) return false;
+      if (!q) return true;
+      const hay = `${a.user_email||''} ${a.user_role||''} ${a.action||''} ${a.request_id||''} ${a.details?JSON.stringify(a.details):''}`.toLowerCase();
+      return hay.includes(q);
+    });
+    const reload = () => { setAuditLoading(true); db.loadAuditLog(null,200).then(r=>setAuditLog(r||[])).finally(()=>setAuditLoading(false)); };
+    return (
+      <div>
+        <h1 style={H1}>Journal d'audit</h1>
+        <p style={{ color:'#64748b', fontSize:13, marginBottom:16 }}>Traçabilité des actions sensibles : validation, refus, impression, expédition, commande PrestaShop.</p>
+        <div className="card" style={{ marginBottom:16, display:'flex', gap:10, flexWrap:'wrap', alignItems:'center' }}>
+          <select className="select" value={auditFilterAction} onChange={e=>setAuditFilterAction(e.target.value)} style={{ maxWidth:240 }}>
+            <option value="">Toutes les actions</option>
+            {actions.map(a=><option key={a} value={a}>{a}</option>)}
+          </select>
+          <input className="input" placeholder="Rechercher (email, demande, détail…)" value={auditSearch} onChange={e=>setAuditSearch(e.target.value)} style={{ flex:1, minWidth:200 }}/>
+          <button className="btn btn-outline" onClick={reload}>🔄 Rafraîchir</button>
+          <span style={{ fontSize:12, color:'#94a3b8', marginLeft:'auto' }}>{rows.length} entrée(s)</span>
+        </div>
+        <div className="card" style={{ overflowX:'auto' }}>
+          {auditLoading ? <p style={{ color:'#94a3b8', padding:12 }}>⏳ Chargement…</p>
+          : rows.length===0 ? <p style={{ color:'#94a3b8', padding:12 }}>Aucune entrée d'audit.</p>
+          : (
+            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+              <thead>
+                <tr style={{ textAlign:'left', borderBottom:'2px solid #e2e8f0', color:'#475569' }}>
+                  <th style={{ padding:'8px 10px' }}>Date</th>
+                  <th style={{ padding:'8px 10px' }}>Utilisateur</th>
+                  <th style={{ padding:'8px 10px' }}>Action</th>
+                  <th style={{ padding:'8px 10px' }}>Demande</th>
+                  <th style={{ padding:'8px 10px' }}>Détails</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(a=>(
+                  <tr key={a.id} style={{ borderBottom:'1px solid #f1f5f9' }}>
+                    <td style={{ padding:'8px 10px', whiteSpace:'nowrap', color:'#64748b' }}>{a.created_at ? new Date(a.created_at).toLocaleString('fr-FR') : '—'}</td>
+                    <td style={{ padding:'8px 10px' }}>{a.user_email||'—'}{a.user_role?<span style={{ marginLeft:6, fontSize:11, padding:'1px 6px', borderRadius:6, background:'#eef2ff', color:'#4338ca' }}>{ROLES[a.user_role]?.label||a.user_role}</span>:null}</td>
+                    <td style={{ padding:'8px 10px', fontWeight:600, color:'#1B3764' }}>{a.action||'—'}</td>
+                    <td style={{ padding:'8px 10px', color:'#64748b' }}>{a.request_id||'—'}</td>
+                    <td style={{ padding:'8px 10px', color:'#64748b', maxWidth:280, overflow:'hidden', textOverflow:'ellipsis' }}>{a.details ? (typeof a.details==='string'?a.details:JSON.stringify(a.details)) : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   const sideItems = [
     { id:'dashboard', icon:'▦', label:'Tableau de bord' },
     { id:'demandes', icon:'📋', label:'Demandes', badge:role==='departement'?stats.toValDept:role==='antenne'?stats.toValAntenne:role==='commission'?stats.toValComm:null },
     ...(role==='departement'&&stats.tdrEnAttentePaiement>0?[{ id:'tdr_paiement', icon:'💳', label:'TDR à payer', badge:stats.tdrEnAttentePaiement }]:[]),
     ...(canCreate?[{ id:'nouvelle', icon:'✚', label:'Nouvelle demande' }]:[]),
-    ...(['antenne','departement'].includes(role)?[{ id:'statistiques', icon:'📊', label:'Statistiques' }]:[]),
+    ...(['antenne','departement','gestion'].includes(role)?[{ id:'statistiques', icon:'📈', label:'Statistiques' }]:[]),
     ...(role==='commission'?[{ id:'validation_rapide', icon:'⚡', label:'Validation rapide', badge:requests.filter(r=>r.statut==='en_commission'&&r.benevole.ans>=r.medalType.years).length||null }]:[]),
     ...(role==='gestion'?[
       { id:'diplomes', icon:'🎖', label:'Diplômes', badge:(stats.toExpedite||null) },
@@ -2773,6 +3102,8 @@ export default function App() {
       { id:'import_csv', icon:'⬆️', label:'Import Google Forms' },
       { id:'import_excel', icon:'📊', label:'Import Excel' },
       { id:'email_templates', icon:'✉️', label:'Notifications & E-mails' },
+      { id:'calibrage_diplomes', icon:'🎓', label:'Calibrage diplômes' },
+      { id:'audit', icon:'📜', label:"Journal d'audit" },
       { id:'parametres', icon:'⚙️', label:'Paramètres' },
     ]:[]),
     ...(['antenne','departement','gestion'].includes(role)?[{ id:'delegues', icon:'👥', label:'Les Délégués' }]:[]),
@@ -3050,8 +3381,10 @@ export default function App() {
         <div className="modal-overlay" onClick={()=>setEmailModal(null)}>
           <div className="modal" style={{ maxWidth:560 }} onClick={e=>e.stopPropagation()}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
-              <h2 style={{ fontFamily:'Playfair Display,serif', color:'#1B3764', fontSize:18 }}>✉️ Simulation d'envoi e-mail</h2>
-              <span style={{ background:'#d1fae5', color:'#059669', borderRadius:20, padding:'3px 10px', fontSize:12, fontWeight:700 }}>Simulé — non envoyé</span>
+              <h2 style={{ fontFamily:'Playfair Display,serif', color:'#1B3764', fontSize:18 }}>✉️ Envoi e-mail</h2>
+              {emailSendState==='sent'
+                ? <span style={{ background:'#d1fae5', color:'#059669', borderRadius:20, padding:'3px 10px', fontSize:12, fontWeight:700 }}>✓ Envoyé</span>
+                : <span style={{ background:'#eef2ff', color:'#4338ca', borderRadius:20, padding:'3px 10px', fontSize:12, fontWeight:700 }}>Prêt à envoyer</span>}
             </div>
             <div style={{ background:'#f8faff', borderRadius:8, padding:'12px 14px', marginBottom:14 }}>
               <div style={{ fontSize:11, color:'#94a3b8', marginBottom:2 }}>À :</div>
@@ -3062,8 +3395,14 @@ export default function App() {
               <div style={{ fontSize:13, fontWeight:700, color:'#1B3764' }}>{emailModal.sujet}</div>
             </div>
             <div style={{ border:'1px solid #e5e7eb', borderRadius:8, padding:'14px 16px', whiteSpace:'pre-wrap', fontSize:13, color:'#374151', lineHeight:1.7 }}>{emailModal.corps}</div>
-            <div style={{ display:'flex', justifyContent:'flex-end', marginTop:16 }}>
+            <div style={{ display:'flex', justifyContent:'flex-end', alignItems:'center', gap:10, marginTop:16 }}>
+              {emailSendState==='error' && <span style={{ color:'#dc2626', fontSize:12, marginRight:'auto' }}>⚠️ {emailSendErr}</span>}
               <button className="btn btn-outline btn-sm" onClick={()=>setEmailModal(null)}>Fermer</button>
+              {emailSendState!=='sent' && (
+                <button className="btn btn-sm" disabled={emailSendState==='sending'} onClick={sendEmailNow}>
+                  {emailSendState==='sending' ? 'Envoi…' : '✉️ Envoyer'}
+                </button>
+              )}
             </div>
           </div>
         </div>
