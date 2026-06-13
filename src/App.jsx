@@ -28,7 +28,7 @@ class ErrorBoundary extends React.Component {
 export { ErrorBoundary };
 
 const APP_TITLE   = "Demande Médaille FNPC";
-const APP_VERSION = "1.2.1";
+const APP_VERSION = "1.3.1";
 const USE_SUPABASE = true;
 
 // ── PrestaShop Webservice ────────────────────────────────────────────────────
@@ -1092,8 +1092,8 @@ export default function App() {
     if (!editReqId && deptDisabled[dept]) { fire('Ce département est désactivé — impossible de soumettre.', 'err'); return; }
     const medalType = medalTypes.find(m => m.id === nrMedal);
     const isTemoig = medalType.category === 'temoignage';
-    const agrafeFlag = isTemoig ? false : nrAgrafe;
     const agrafeIds  = isTemoig ? []    : nrAgrafeDepts;
+    const agrafeFlag = isTemoig ? false : (nrAgrafe || agrafeIds.length > 0);
     const isExceptional = vol.ans < medalType.years;
     // Duplicate check: same benevole + same medal, unless agrafe or exceptional facts
     if (!editReqId && !nrAgrafeDepts.length && !isExceptional) {
@@ -1165,46 +1165,56 @@ export default function App() {
 
   const saveWordCfg = () => { db.saveConfig('word_template', wordCfg); fire('Modèle du document Word enregistré ✓'); };
 
+  // Fenêtre d'aide séparée (contact e-mail)
+  const openHelp = () => {
+    const w = window.open('', 'aide_fnpc', 'width=480,height=540,menubar=no,toolbar=no,location=no');
+    if (!w) { window.location.href = 'mailto:medaille@protection-civile.org?subject=Aide%20-%20Appli%20Medaille%20FNPC'; return; }
+    w.document.write(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Aide — Appli Médaille FNPC</title>
+<style>body{font-family:system-ui,'Segoe UI',Arial,sans-serif;margin:0;background:#eef2f7;color:#1B3764}
+.h{background:#1B3764;color:#fff;padding:22px;border-bottom:3px solid #E87722;text-align:center}.h h1{margin:0;font-size:18px}
+.c{padding:24px;line-height:1.6;font-size:14px;color:#334155}
+a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-decoration:none;padding:10px 16px;border-radius:8px;font-weight:700}
+.ft{color:#94a3b8;font-size:12px;margin-top:20px}</style></head><body>
+<div class="h"><h1>Besoin d'aide ?</h1></div>
+<div class="c"><p>Pour toute question relative aux médailles ou à l'utilisation de l'application, contactez l'équipe de la Fédération&nbsp;:</p>
+<p><a class="mail" href="mailto:medaille@protection-civile.org?subject=Aide%20-%20Appli%20Medaille%20FNPC">✉️ medaille@protection-civile.org</a></p>
+<p class="ft">Fédération Nationale de la Protection Civile</p></div></body></html>`);
+    w.document.close();
+  };
+
   // ── Génération du Word « Liste des récipiendaires » pour une agrafe ──
   const genAgrafeWord = async (ag) => {
     const agReqs = requests.filter(r => r.agrafeDepts && r.agrafeDepts.includes(ag.id) && ['valide_federation','diplome_emis','expedie'].includes(r.statut));
     if (!agReqs.length) { fire('Aucune demande validée pour cette agrafe', 'err'); return; }
     fire('Génération du document Word…');
     try {
-      const { Document, Packer, Paragraph, HeadingLevel, AlignmentType } = await import('docx');
+      const [pizzipMod, dtMod] = await Promise.all([ import('pizzip'), import('docxtemplater') ]);
+      const PizZip = pizzipMod.default || pizzipMod;
+      const Docxtemplater = dtMod.default || dtMod;
+      const resp = await fetch('/templates/liste_recipiendaires_template.docx');
+      if (!resp.ok) throw new Error('Gabarit Word introuvable');
+      const zip = new PizZip(await resp.arrayBuffer());
+      const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true, nullGetter: () => '' });
       const groups = {};
       agReqs.forEach(r => { (groups[r.medalType.id] = groups[r.medalType.id] || []).push(r); });
       const order = Object.keys(groups).sort((a,b)=>{ const ma=MEDAL_TYPES.find(m=>m.id===a), mb=MEDAL_TYPES.find(m=>m.id===b); return (mb?.years||0)-(ma?.years||0); });
-      const children = [
-        new Paragraph({ text:(wordCfg.titre||'Liste des récipiendaires'), heading:HeadingLevel.TITLE, alignment:AlignmentType.CENTER }),
-        new Paragraph({ text:ag.nom, heading:HeadingLevel.HEADING_1, alignment:AlignmentType.CENTER }),
-        new Paragraph({ text:'' }),
-      ];
       const preamble = (ag.texte || wordCfg.preambule || DEFAULT_AGRAFE_TEXTE).trim();
-      if (preamble) {
-        children.push(new Paragraph({ text:'Préambule', heading:HeadingLevel.HEADING_2 }));
-        preamble.split(/\n+/).forEach(p => children.push(new Paragraph({ text:p.trim() })));
-        children.push(new Paragraph({ text:'' }));
-      }
-      children.push(new Paragraph({ text:'Liste des personnels distingués', heading:HeadingLevel.HEADING_2 }));
-      children.push(new Paragraph({ text:(wordCfg.intro||DEFAULT_LIST_INTRO) }));
-      children.push(new Paragraph({ text:'' }));
-      order.forEach(mid => {
-        const m = MEDAL_TYPES.find(x => x.id === mid);
-        children.push(new Paragraph({ text:m?.label || mid, heading:HeadingLevel.HEADING_3 }));
-        groups[mid].forEach(r => {
-          const civ = r.benevole.genre === 'F' ? 'Mme' : 'M';
-          const dept = (r.dept || '').split(' - ')[1] || r.dept || '';
-          children.push(new Paragraph({ text:`${civ} ${r.benevole.nom} ${r.benevole.prenom}, bénévole de la Protection Civile de ${dept}` }));
-        });
-        children.push(new Paragraph({ text:'' }));
+      doc.render({
+        titre: wordCfg.titre || 'Liste des récipiendaires',
+        nom: ag.nom || '',
+        preambule: preamble.split(/\n+/).map(s => s.trim()).filter(Boolean),
+        intro: wordCfg.intro || DEFAULT_LIST_INTRO,
+        groups: order.map(mid => ({
+          medal: MEDAL_TYPES.find(x => x.id === mid)?.label || mid,
+          people: groups[mid].map(r => {
+            const civ = r.benevole.genre === 'F' ? 'Mme' : 'M';
+            const dept = (r.dept || '').split(' - ')[1] || r.dept || '';
+            return `${civ} ${r.benevole.nom} ${r.benevole.prenom}, bénévole de la Protection Civile de ${dept}`;
+          }),
+        })),
+        president: (wordCfg.president || '').trim(),
       });
-      if ((wordCfg.president||'').trim()) {
-        children.push(new Paragraph({ text:'' }));
-        children.push(new Paragraph({ text:wordCfg.president.trim(), alignment:AlignmentType.RIGHT }));
-      }
-      const doc = new Document({ sections:[{ children }] });
-      const blob = await Packer.toBlob(doc);
+      const blob = doc.getZip().generate({ type:'blob', mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
       a.download = `Liste_recipiendaires_${(ag.nom || 'agrafe').replace(/[^a-z0-9]+/gi,'_')}.docx`;
@@ -1212,7 +1222,7 @@ export default function App() {
       fire('Document Word généré ✓');
     } catch (e) {
       console.error('genAgrafeWord', e);
-      fire('Erreur génération Word — la dépendance « docx » doit être installée (npm install).', 'err');
+      fire('Erreur génération Word — lancez « npm install » (docxtemplater, pizzip) puis redéployez.', 'err');
     }
   };
 
@@ -2151,7 +2161,7 @@ export default function App() {
                     <input type="checkbox" checked={selectedBatch.includes(req.id)} onChange={()=>!unpaid&&toggleBatch(req.id)} disabled={unpaid} style={{ width:15, height:15, flexShrink:0 }}/>
                     <div style={{ flex:1 }}>
                       <div style={{ fontFamily:'Playfair Display,serif', fontWeight:700, color:'#1B3764', fontSize:14 }}>{req.benevole.prenom} {req.benevole.nom}</div>
-                      <div style={{ color:'#E87722', fontSize:12, fontWeight:600 }}>{req.medalType.label}{req.agrafe?`  🏅 Agrafe : ${agrafeNoms(req)||'—'}`:''}</div>
+                      <div style={{ color:'#E87722', fontSize:12, fontWeight:600 }}>{req.medalType.label}{agrafeNoms(req)?` — 🏅 Agrafe : ${agrafeNoms(req)}`:''}</div>
                       {unpaid&&<span style={{ fontSize:10, background:'#fef9c3', color:'#92400e', borderRadius:10, padding:'0 6px', fontWeight:700 }}>🔒 Impression bloquée — paiement requis ({tarif}€)</span>}
                     </div>
                     <div style={{ textAlign:'right', flexShrink:0 }}>
@@ -3331,7 +3341,7 @@ export default function App() {
           </>}
           {role!=='antenne' && (stats.delayedDept>0||stats.delayedComm>0) && <span onClick={alertInfo?.action} style={{ background:'#ef4444', color:'white', borderRadius:20, padding:'2px 8px', fontSize:11, fontWeight:800, cursor:'pointer' }} title="Demandes en retard">⏰ {role==='departement'?stats.delayedDept:stats.delayedComm}</span>}
           {/* User badge + logout */}
-          {authUser && ['antenne','departement','commission'].includes(role) && <a href="mailto:medaille@protection-civile.org?subject=Aide%20-%20Appli%20Medaille%20FNPC" title="Pour toute question : medaille@protection-civile.org" style={{ display:'inline-flex', alignItems:'center', gap:5, height:26, padding:'0 10px', borderRadius:13, border:'1px solid rgba(255,255,255,0.3)', background:'rgba(255,255,255,0.1)', color:'white', cursor:'pointer', fontSize:12, fontWeight:600, textDecoration:'none' }}>✉️ Aide</a>}
+          {authUser && ['antenne','departement','commission'].includes(role) && <button onClick={openHelp} title="Pour toute question : medaille@protection-civile.org" style={{ display:'inline-flex', alignItems:'center', gap:5, height:26, padding:'0 10px', borderRadius:13, border:'1px solid rgba(255,255,255,0.3)', background:'rgba(255,255,255,0.1)', color:'white', cursor:'pointer', fontSize:12, fontWeight:600 }}>✉️ Aide</button>}
           {authUser && (role==='antenne'||role==='departement') && <button onClick={()=>setTourStep(0)} title="Revoir la visite guidée" style={{ width:26, height:26, borderRadius:'50%', border:'1px solid rgba(255,255,255,0.3)', background:'rgba(255,255,255,0.1)', color:'white', cursor:'pointer', fontSize:13, fontWeight:700, lineHeight:1 }}>?</button>}
           {authUser && <div style={{ display:'flex', alignItems:'center', gap:6 }}>
             <div style={{ textAlign:'right' }}>
@@ -3420,7 +3430,7 @@ export default function App() {
             <div style={{ display:'flex', gap:10, alignItems:'center', background:selected.medalType.light, border:`1px solid ${selected.medalType.color}40`, borderRadius:8, padding:11, marginBottom:14 }}>
               <div style={{ width:40, height:40, borderRadius:'50%', background:selected.medalType.color, display:'flex', alignItems:'center', justifyContent:'center', fontSize:18, flexShrink:0 }}>🎖</div>
               <div style={{ flex:1 }}>
-                <div style={{ fontFamily:'Playfair Display,serif', fontWeight:700, color:'#1B3764', fontSize:14 }}>{selected.medalType.label}{selected.agrafe?` 🏅 Agrafe : ${agrafeNoms(selected)||'—'}`:''}</div>
+                <div style={{ fontFamily:'Playfair Display,serif', fontWeight:700, color:'#1B3764', fontSize:14 }}>{selected.medalType.label}{agrafeNoms(selected)?` — 🏅 Agrafe : ${agrafeNoms(selected)}`:''}</div>
                 <div style={{ fontSize:11, color:'#64748b', marginTop:1 }}>{selected.medalType.years} ans requis · {selected.benevole.ans} ans</div>
                 {selected.medalType.payant&&<div style={{ marginTop:4 }}><span style={{ background:selected.paiement==='paye'?'#d1fae5':'#fef9c3', color:selected.paiement==='paye'?'#059669':'#92400e', borderRadius:10, padding:'1px 8px', fontSize:11, fontWeight:700 }}>{selected.paiement==='paye'?`✓ Payé (${tarif}€)`:`⏳ Paiement ${tarif}€ requis`}</span></div>}
               </div>
@@ -3451,7 +3461,7 @@ export default function App() {
                 {role==='gestion'&&<div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
                   <button className="btn btn-outline btn-sm" onClick={()=>{ setDiplomaView({ ...selected, _printMode:'template' }); setSelected(null); }}>📄 Template</button>
                   <button className="btn btn-orange btn-sm" onClick={()=>{ setDiplomaView({ ...selected, _printMode:'full' }); setSelected(null); }}>🖨 PDF complet</button>
-                  {selected.agrafe&&<>
+                  {agrafeNoms(selected)&&<>
                     <button className="btn btn-outline btn-sm" onClick={()=>{ setDiplomaView({ ...selected, _printMode:'template', _gabarit:'agrafe' }); setSelected(null); }}>🏅 Agrafe (template)</button>
                     <button className="btn btn-orange btn-sm" onClick={()=>{ setDiplomaView({ ...selected, _printMode:'full', _gabarit:'agrafe' }); setSelected(null); }}>🏅 Agrafe PDF</button>
                   </>}
