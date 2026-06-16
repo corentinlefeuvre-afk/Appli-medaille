@@ -1,0 +1,31 @@
+name: CI build
+
+# Vérifie que l'application compile à chaque push / pull request.
+# Si "npm run build" échoue, l'action passe au rouge : on sait AVANT de déployer
+# qu'une version est cassée.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: ['**']
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Installer Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # npm install (et pas npm ci) car le package-lock.json peut être en retard
+      # sur le package.json. Pense à committer le lock après "npm install" en local.
+      - name: Installer les dépendances
+        run: npm install
+
+      - name: Build de production (échoue si erreur)
+        run: npm run build
