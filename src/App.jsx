@@ -33,7 +33,7 @@ class ErrorBoundary extends React.Component {
 export { ErrorBoundary };
 
 const APP_TITLE   = "Demande Médaille FNPC";
-const APP_VERSION = "1.4.8";
+const APP_VERSION = "1.5.0";
 const USE_SUPABASE = true;
 
 // ── PrestaShop Webservice ────────────────────────────────────────────────────
@@ -842,6 +842,7 @@ export default function App() {
     if (!vol || !nrMedal || !nrJust.trim()) return;
     if (nrJust.trim().length < 50) { fire('Les motivations doivent comporter au moins 50 caractères.', 'err'); return; }
     const dept = lockedDept || nrDept || vol.dept;
+    if (!dept) { fire('Sélectionnez un département pour cette demande (champ « Association APC »).', 'err'); return; }
     if (!editReqId && deptDisabled[dept]) { fire('Ce département est désactivé — impossible de soumettre.', 'err'); return; }
     const medalType = medalTypes.find(m => m.id === nrMedal);
     const isTemoig = medalType.category === 'temoignage';
@@ -1200,6 +1201,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
           <h1 style={H1}>Tableau de bord</h1>
           <p style={{ color:'#64748b', marginTop:4, fontSize:14 }}>Bienvenue, <strong>{ROLES[role].label}</strong> · {ROLES[role].org}</p>
         </div>
+        {(role==='antenne'||role==='departement') && myDepts.length===0 && <div style={{ background:'#fef2f2', border:'2px solid #dc2626', borderRadius:10, padding:'12px 16px', marginBottom:12, fontSize:14, color:'#dc2626', fontWeight:700 }}>⚠️ Aucun département n'est rattaché à votre compte : vous ne verrez aucune demande. {role==='departement'?'Demandez à la Gestion FNPC de vous ajouter à un groupement (ou de renseigner le département de votre compte).':'Demandez à la Gestion FNPC de renseigner le département de votre compte.'}</div>}
         {welcome && <div style={{ background:'#eff6ff', border:'1px solid #bfdbfe', borderRadius:10, padding:'11px 16px', marginBottom:12, fontSize:14, color:'#1e40af' }}>💬 {welcome}</div>}
         {deptDisabled[ROLES[role]?.dept] && <div style={{ background:'#fef2f2', border:'2px solid #dc2626', borderRadius:10, padding:'12px 16px', marginBottom:12, fontSize:14, color:'#dc2626', fontWeight:700 }}>🚫 Votre département est désactivé — les nouvelles demandes sont temporairement bloquées. Contactez la Gestion FNPC.</div>}
         {role==='departement' && stats.pretCommission > 0 && (
