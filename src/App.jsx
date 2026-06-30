@@ -33,7 +33,7 @@ class ErrorBoundary extends React.Component {
 export { ErrorBoundary };
 
 const APP_TITLE   = "Demande Médaille FNPC";
-const APP_VERSION = "1.4.7";
+const APP_VERSION = "1.4.8";
 const USE_SUPABASE = true;
 
 // ── PrestaShop Webservice ────────────────────────────────────────────────────
@@ -190,7 +190,8 @@ export default function App() {
         const wordCfg_cfg = await db.loadConfig('word_template');
         if (wordCfg_cfg) setWordCfg({ ...DEFAULT_WORD_CFG, ...wordCfg_cfg });
         const grp_cfg = await db.loadConfig('groupements');
-        if (Array.isArray(grp_cfg)) setGroupements(grp_cfg);
+        const grpList = Array.isArray(grp_cfg) ? grp_cfg : (Array.isArray(grp_cfg?.v) ? grp_cfg.v : null);
+        if (grpList) setGroupements(grpList);
         const depts_cfg = await db.loadDepartments();
         if (depts_cfg && Object.keys(depts_cfg).length > 0) setDeptAddresses(depts_cfg);
         setDbConnected(true);
