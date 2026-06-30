@@ -1,6 +1,6 @@
 {
   "name": "fnpc-medailles",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "Application de gestion des distinctions et médailles FNPC",
   "type": "module",
   "scripts": {

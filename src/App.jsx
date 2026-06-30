@@ -33,7 +33,7 @@ class ErrorBoundary extends React.Component {
 export { ErrorBoundary };
 
 const APP_TITLE   = "Demande Médaille FNPC";
-const APP_VERSION = "1.5.0";
+const APP_VERSION = "1.5.1";
 const USE_SUPABASE = true;
 
 // ── PrestaShop Webservice ────────────────────────────────────────────────────
@@ -1624,7 +1624,8 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
           <div className="st">1. Identification du demandeur</div>
           <div style={{ background:'#f0fdf4', border:'1px solid #86efac', borderRadius:8, padding:'9px 12px', marginBottom:10, fontSize:12, color:'#065f46' }}>🔒 Informations issues de votre compte SSO — non modifiables.</div>
           <div className="fg"><label className="fl">E-mail</label><input className="input" value={nrEmail} readOnly style={{ background:'#f8faff', color:'#64748b' }}/></div>
-          {!lockedDept && <div className="fg"><label className="fl">Association APC *</label><select className="select" value={nrDept} onChange={e=>setNrDept(e.target.value)}><option value="">— Département —</option>{(role==='departement'?myDepts:DEPTS).map(d=><option key={d} value={d}>{d}</option>)}</select></div>}
+          {!lockedDept && role==='antenne' && <div className="fg"><label className="fl">Association APC *</label><div style={{ background:'#fef2f2', border:'1px solid #fca5a5', borderRadius:8, padding:'10px 12px', fontSize:13, color:'#dc2626' }}>⚠️ Aucun département n'est rattaché à votre compte. Contactez la Gestion FNPC pour le configurer — la soumission est impossible sans cela.</div></div>}
+          {!lockedDept && role!=='antenne' && <div className="fg"><label className="fl">Association APC *</label><select className="select" value={nrDept} onChange={e=>setNrDept(e.target.value)}><option value="">— Département —</option>{(role==='departement'?myDepts:DEPTS).map(d=><option key={d} value={d}>{d}</option>)}</select></div>}
           {lockedDept && <div className="fg"><label className="fl">Association APC</label><input className="input" value={lockedDept} readOnly style={{ background:'#f8faff', color:'#64748b' }}/></div>}
           <div className="fg" style={{ marginBottom:0 }}><label className="fl">Demandeur</label><input className="input" value={nrDemandeur} readOnly style={{ background:'#f8faff', color:'#64748b' }}/></div>
         </div>
