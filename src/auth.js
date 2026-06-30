@@ -1,6 +1,6 @@
 // ─── AUTH SERVICE ─────────────────────────────────────────────────────────────
 // Couche d'abstraction pour l'authentification.
-// Actuellement : login par email/password via Supabase (app_users).
+// Actuellement : login email/password via la fonction sécurisée verify_login (mot de passe haché).
 // À remplacer par Entra ID (MSAL) lors de la recette SSO,
 // en modifiant uniquement ce fichier — pas App.jsx.
 
@@ -27,25 +27,21 @@ export const auth = {
     sessionStorage.removeItem(SESSION_KEY);
   },
 
-  // Login email/password via Supabase app_users
+  // Login email/password via la fonction sécurisée verify_login (mot de passe haché côté base)
   async login(email, password) {
     const { data, error } = await db.supabase
-      .from('app_users')
-      .select('*')
-      .eq('email', email.toLowerCase().trim())
-      .eq('password', password)
-      .eq('actif', true)
-      .single();
-    if (error || !data) throw new Error('E-mail ou mot de passe incorrect, ou compte désactivé.');
+      .rpc('verify_login', { p_email: email.toLowerCase().trim(), p_password: password });
+    const row = Array.isArray(data) ? data[0] : data;
+    if (error || !row) throw new Error('E-mail ou mot de passe incorrect, ou compte désactivé.');
     const user = {
-      id:       data.id,
-      email:    data.email,
-      nom:      data.nom,
-      prenom:   data.prenom,
-      role:     data.role,
-      roles:    data.roles ? data.roles.split(',').map(s => s.trim()).filter(Boolean) : [data.role],
-      dept:     data.dept,
-      antenne:  data.antenne,
+      id:       row.id,
+      email:    row.email,
+      nom:      row.nom,
+      prenom:   row.prenom,
+      role:     row.role,
+      roles:    row.roles ? row.roles.split(',').map(s => s.trim()).filter(Boolean) : [row.role],
+      dept:     row.dept,
+      antenne:  row.antenne,
     };
     auth.saveSession(user);
     return user;

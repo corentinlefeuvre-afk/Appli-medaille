@@ -6,6 +6,7 @@ import { CSS, LOGO_SRC, FAV_SRC } from './assets.js';
 import {
   DEPTS, MEDAL_TYPES, STATUSES, ROLES, MOCK_VOLUNTEERS, today, daysSince, getDeptCode, generateDiplomaNumber, getNextMedalSuggestion, DEFAULT_EMAIL_TEMPLATES, DEFAULT_DIPLOMA_TEMPLATES, DIPLOMA_FIELD_LABELS, MEDAL_TO_GABARIT, DIPLOMA_SAMPLE, TOUR_STEPS, DEFAULT_AGRAFE_TEXTE, DEFAULT_LIST_INTRO, DEFAULT_WORD_CFG, DIPLOMA_PAGE_W, ptToPx, FONT_OPTIONS
 } from './constants.js';
+import { diplomaDateFr, diplomaPageHtml, DiplomaModal } from './diploma.jsx';
 
 // ─── ERROR BOUNDARY ───────────────────────────────────────────────────────────
 class ErrorBoundary extends React.Component {
@@ -32,7 +33,7 @@ class ErrorBoundary extends React.Component {
 export { ErrorBoundary };
 
 const APP_TITLE   = "Demande Médaille FNPC";
-const APP_VERSION = "1.3.9";
+const APP_VERSION = "1.4.7";
 const USE_SUPABASE = true;
 
 // ── PrestaShop Webservice ────────────────────────────────────────────────────
@@ -178,7 +179,14 @@ export default function App() {
         const emailTpl_cfg = await db.loadConfig('email_templates');
         if (emailTpl_cfg) setEmailTemplates({ ...DEFAULT_EMAIL_TEMPLATES, ...emailTpl_cfg }); // merge : on garde les nouveaux modèles par défaut
         const dipTpl_cfg = await db.loadConfig('diploma_templates');
-        if (dipTpl_cfg) setDiplomaTpl({ ...DEFAULT_DIPLOMA_TEMPLATES, ...dipTpl_cfg });
+        if (dipTpl_cfg) {
+          const merged = { ...DEFAULT_DIPLOMA_TEMPLATES };
+          for (const g of Object.keys(dipTpl_cfg)) {
+            const def = DEFAULT_DIPLOMA_TEMPLATES[g] || {};
+            merged[g] = { ...def, ...dipTpl_cfg[g], fields: { ...(def.fields || {}), ...(dipTpl_cfg[g].fields || {}) } };
+          }
+          setDiplomaTpl(merged);
+        }
         const wordCfg_cfg = await db.loadConfig('word_template');
         if (wordCfg_cfg) setWordCfg({ ...DEFAULT_WORD_CFG, ...wordCfg_cfg });
         const grp_cfg = await db.loadConfig('groupements');
@@ -310,6 +318,9 @@ export default function App() {
   const [agrEditDepts, setAgrEditDepts] = useState([]);
   const [agrEditNom, setAgrEditNom] = useState('');
   const [agrEditTexte, setAgrEditTexte] = useState('');
+  const [agrEditTitre, setAgrEditTitre] = useState('');
+  const [agrEditIntro, setAgrEditIntro] = useState('');
+  const [agrEditPresident, setAgrEditPresident] = useState('');
   // Correction FNPC (gestion peut tout modifier sans changer le statut)
   const [gEdit, setGEdit] = useState(null); // requête en cours de correction
   const [gNom, setGNom] = useState(''); const [gPrenom, setGPrenom] = useState('');
@@ -482,6 +493,27 @@ export default function App() {
   const [nrAgrafeDepts, setNrAgrafeDepts] = useState([]);
 
   const fire = (msg, type = 'ok') => { setToast({ msg, type }); setTimeout(() => setToast(null), 3500); };
+
+  // Route d'impression headless (pour l'agent) : ?print=batch&type=medaille|temoignage|all&mode=complet|preimprime&dept=...&auto=1
+  const printRoute = useMemo(() => {
+    try {
+      const p = new URLSearchParams(window.location.search);
+      if (p.get('print') !== 'batch') return null;
+      return {
+        type: p.get('type') || 'all',
+        dept: p.get('dept') || '',
+        mode: p.get('mode') === 'preimprime' ? 'preimprime' : 'complet',
+        auto: p.get('auto') === '1',
+      };
+    } catch { return null; }
+  }, []);
+
+  useEffect(() => {
+    if (printRoute && printRoute.auto && !dbLoading) {
+      const t = setTimeout(() => window.print(), 800);
+      return () => clearTimeout(t);
+    }
+  }, [printRoute, dbLoading]);
 
   // Départements gérés par le compte connecté (via les groupements pour un APC)
   const myDepts = useMemo(() => {
@@ -914,6 +946,92 @@ export default function App() {
     if (emEditorRef.current) setEmCorps(emEditorRef.current.innerHTML);
   };
 
+  // ── Bordereau d'expédition A4 (page de rupture entre lots : adresse + liste des diplômes) ──
+  const openShippingLabel = (dept, list = []) => {
+    const a = deptAddresses[dept] || {};
+    if (!a.nom && !a.adresse) { fire(`Aucune adresse configurée pour ${dept} (Paramètres APC → Adresse)`, 'err'); return; }
+    const w = window.open('', 'bordereau_fnpc', 'width=820,height=920,menubar=no,toolbar=no');
+    if (!w) { fire('Fenêtre bloquée — autorisez les pop-ups pour ce site', 'err'); return; }
+    const recipient = [a.nom, a.adresse, `${a.cp || ''} ${a.ville || ''}`.trim()].filter(Boolean).join('<br>');
+    const dateFr = new Date().toLocaleDateString('fr-FR');
+    const rows = (list || []).map(r =>
+      `<tr><td>${r.benevole.prenom} ${r.benevole.nom}</td><td>${r.medalType.label}</td><td>${r.diplomeId || ''}</td></tr>`
+    ).join('') || '<tr><td colspan="3" style="color:#999">Aucun diplôme</td></tr>';
+    w.document.write(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Bordereau — ${dept}</title>
+<style>
+  @page { size: A4; margin: 18mm; }
+  body { font-family: Arial, Helvetica, sans-serif; margin:0; color:#111; page-break-after: always; }
+  .bar { height:6px; background:#E87722; }
+  .head { display:flex; justify-content:space-between; align-items:flex-start; margin-top:16px; }
+  .title { font-size:22px; font-weight:bold; color:#1B3764; }
+  .blocks { display:flex; gap:28px; margin-top:26px; }
+  .block { flex:1; }
+  .lbl { font-size:10px; letter-spacing:1.5px; color:#999; text-transform:uppercase; margin-bottom:5px; }
+  .from { font-size:13px; color:#444; line-height:1.5; }
+  .to { font-size:20px; font-weight:bold; line-height:1.4; }
+  h2 { font-size:13px; color:#1B3764; margin:34px 0 8px; border-bottom:2px solid #E87722; padding-bottom:5px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:7px 8px; border-bottom:1px solid #e5e7eb; }
+  th { background:#f1f5f9; color:#1B3764; font-size:11px; text-transform:uppercase; letter-spacing:.5px; }
+  .meta { margin-top:18px; font-size:12px; color:#555; }
+  .btn { margin-top:24px; padding:9px 16px; border:none; border-radius:6px; background:#1B3764; color:#fff; font-weight:bold; cursor:pointer; }
+  @media print { .btn { display:none; } }
+</style></head><body>
+  <div class="bar"></div>
+  <div class="head">
+    <div class="title">Bordereau d'expédition</div>
+    <div style="text-align:right;font-size:12px;color:#555">${dateFr}<br><strong>${dept}</strong></div>
+  </div>
+  <div class="blocks">
+    <div class="block"><div class="lbl">Expéditeur</div>
+      <div class="from"><strong>Fédération Nationale<br>de la Protection Civile</strong></div></div>
+    <div class="block"><div class="lbl">Destinataire</div>
+      <div class="to">${recipient}</div></div>
+  </div>
+  <h2>Diplômes — ${(list || []).length}</h2>
+  <table><thead><tr><th>Bénévole</th><th>Distinction</th><th>N° diplôme</th></tr></thead><tbody>${rows}</tbody></table>
+  <div class="meta">Cette page (A4 standard) sépare ce lot du suivant et accompagne l'envoi.</div>
+  <button class="btn" onclick="window.print()">🖨 Imprimer le bordereau</button>
+</body></html>`);
+    w.document.close();
+  };
+
+  // ── Impression groupée CALIBRÉE (une page A4 paysage par diplôme) ──
+  const openCalibratedBatch = (reqs, mode) => {
+    const list = (reqs || []).filter(r => r && r.benevole && r.medalType);
+    if (!list.length) { fire('Aucun diplôme à imprimer', 'err'); return; }
+    const w = window.open('', 'diplomes_batch', 'width=1000,height=760,menubar=no,toolbar=no');
+    if (!w) { fire('Fenêtre bloquée — autorisez les pop-ups pour ce site', 'err'); return; }
+    const pages = list.map(r => {
+      const gabarit = MEDAL_TO_GABARIT[r.medalType.id] || 'medaille';
+      const agrafeNom = (r.agrafeDepts || []).map(id => agrafes.find(a => a.id === id)?.nom).filter(Boolean).join(', ');
+      const values = {
+        niveau: r.medalType.shortLabel || '',
+        nom: `${r.benevole.prenom} ${r.benevole.nom}`,
+        date: diplomaDateFr(r),
+        numero: r.diplomeId || '—',
+        agrafe: agrafeNom || '',
+      };
+      return diplomaPageHtml(diplomaTpl, gabarit, mode, values);
+    }).join('');
+    const modeLabel = mode === 'complet' ? 'Diplôme complet (fond inclus)' : 'Pré-imprimé (texte seul)';
+    w.document.write(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Diplômes — ${list.length}</title>
+<style>
+  @page { size: A4 landscape; margin: 0; }
+  body { margin:0; background:#444; font-family:Arial,Helvetica,sans-serif; }
+  .toolbar { position:sticky; top:0; z-index:10; background:#1B3764; color:#fff; padding:10px 16px; display:flex; gap:12px; align-items:center; }
+  .toolbar button { padding:8px 14px; border:none; border-radius:6px; background:#E87722; color:#fff; font-weight:bold; cursor:pointer; }
+  .pages { padding:16px; }
+  .page { position:relative; width:297mm; height:210mm; overflow:hidden; background:#fff; margin:0 auto 16px; box-shadow:0 2px 12px rgba(0,0,0,.5); page-break-after:always; }
+  @media print { .toolbar { display:none; } .pages { padding:0; } .page { margin:0; box-shadow:none; } }
+</style></head><body>
+  <div class="toolbar"><strong>${list.length} diplôme(s)</strong> · ${modeLabel} · orientation Paysage
+    <button onclick="window.print()">🖨 Imprimer / Enregistrer en PDF</button></div>
+  <div class="pages">${pages}</div>
+</body></html>`);
+    w.document.close();
+  };
+
   // Fenêtre d'aide séparée (contact e-mail)
   const openHelp = () => {
     const w = window.open('', 'aide_fnpc', 'width=480,height=540,menubar=no,toolbar=no,location=no');
@@ -949,10 +1067,11 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
       const order = Object.keys(groups).sort((a,b)=>{ const ma=MEDAL_TYPES.find(m=>m.id===a), mb=MEDAL_TYPES.find(m=>m.id===b); return (mb?.years||0)-(ma?.years||0); });
       const preamble = (ag.texte || wordCfg.preambule || DEFAULT_AGRAFE_TEXTE).trim();
       doc.render({
-        titre: wordCfg.titre || 'Liste des récipiendaires',
+        titre: (ag.titre || '').trim() || wordCfg.titre || 'Liste des récipiendaires',
+        date: new Date().toLocaleDateString('fr-FR'),
         nom: ag.nom || '',
         preambule: preamble.split(/\n+/).map(s => s.trim()).filter(Boolean),
-        intro: wordCfg.intro || DEFAULT_LIST_INTRO,
+        intro: (ag.intro || '').trim() || wordCfg.intro || DEFAULT_LIST_INTRO,
         groups: order.map(mid => ({
           medal: MEDAL_TYPES.find(x => x.id === mid)?.label || mid,
           people: groups[mid].map(r => {
@@ -961,7 +1080,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
             return `${civ} ${r.benevole.nom} ${r.benevole.prenom}, bénévole de la Protection Civile de ${dept}`;
           }),
         })),
-        president: (wordCfg.president || '').trim(),
+        president: ((ag.president || '').trim() || wordCfg.president || '').trim(),
       });
       const blob = doc.getZip().generate({ type:'blob', mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
       const a = document.createElement('a');
@@ -1961,7 +2080,8 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
               <option value="all">Tous les départements</option>
               {depts.map(d=><option key={d} value={d}>{d}</option>)}
             </select>
-            <button className="btn btn-orange btn-sm" style={{ marginLeft:'auto' }} onClick={()=>window.print()}>🖨 Tout imprimer ({toPrint.length})</button>
+            <button className="btn btn-orange btn-sm" style={{ marginLeft:'auto' }} onClick={()=>openCalibratedBatch(toPrint, impMode==='template'?'preimprime':'complet')}>🖨 Impression groupée calibrée ({toPrint.length})</button>
+            {impDept!=='all' && <button className="btn btn-outline btn-sm" onClick={()=>openShippingLabel(impDept, toPrint)}>📄 Bordereau A4 (rupture + adresse)</button>}
           </div>
         </div>
         {toPrint.length===0&&<div className="card" style={{ textAlign:'center', padding:36, color:'#94a3b8' }}>📭 Aucun diplôme</div>}
@@ -2262,8 +2382,8 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
   }
 
   function AgrafesPage() {
-    const startEdit = (ag) => { setAgrEditId(ag.id); setAgrEditDepts([...ag.depts]); setAgrEditNom(ag.nom||''); setAgrEditTexte(ag.texte||''); };
-    const saveEdit = () => { setAgrafes(p=>p.map(a=>a.id!==agrEditId?a:{ ...a, nom:agrEditNom.trim()||a.nom, texte:agrEditTexte, depts:agrEditDepts })); setAgrEditId(null); fire('Agrafe mise à jour ✓'); };
+    const startEdit = (ag) => { setAgrEditId(ag.id); setAgrEditDepts([...ag.depts]); setAgrEditNom(ag.nom||''); setAgrEditTexte(ag.texte||''); setAgrEditTitre(ag.titre||''); setAgrEditIntro(ag.intro||''); setAgrEditPresident(ag.president||''); };
+    const saveEdit = () => { setAgrafes(p=>p.map(a=>a.id!==agrEditId?a:{ ...a, nom:agrEditNom.trim()||a.nom, texte:agrEditTexte, titre:agrEditTitre, intro:agrEditIntro, president:agrEditPresident, depts:agrEditDepts })); setAgrEditId(null); fire('Agrafe mise à jour ✓'); };
     return (
       <div style={{ maxWidth:680 }}>
         <h1 style={H1}>Médailles exceptionnelles (Agrafes)</h1>
@@ -2289,6 +2409,15 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
               <input className="input" style={{ marginBottom:10 }} value={agrEditNom} onChange={e=>setAgrEditNom(e.target.value)} placeholder="Ex: Médaille Exceptionnelle Inondations 2025"/>
               <label className="fl" style={{ marginBottom:6 }}>Texte du document <span style={{ color:'#94a3b8', fontWeight:400 }}>(préambule de la liste)</span></label>
               <textarea className="textarea" rows={3} style={{ marginBottom:10 }} value={agrEditTexte} onChange={e=>setAgrEditTexte(e.target.value)}/>
+              <div style={{ background:'#f8faff', border:'1px solid #e5e7eb', borderRadius:8, padding:'10px 12px', marginBottom:10 }}>
+                <div style={{ fontSize:11, fontWeight:700, color:'#1B3764', marginBottom:8 }}>📄 Modèle Word de cette agrafe <span style={{ color:'#94a3b8', fontWeight:400 }}>(optionnel — sinon valeurs globales)</span></div>
+                <label className="fl" style={{ marginBottom:4 }}>Titre</label>
+                <input className="input" style={{ marginBottom:8 }} value={agrEditTitre} onChange={e=>setAgrEditTitre(e.target.value)} placeholder={wordCfg.titre||'Liste des récipiendaires'}/>
+                <label className="fl" style={{ marginBottom:4 }}>Introduction</label>
+                <textarea className="textarea" rows={2} style={{ marginBottom:8 }} value={agrEditIntro} onChange={e=>setAgrEditIntro(e.target.value)} placeholder="Laisser vide pour le texte global"/>
+                <label className="fl" style={{ marginBottom:4 }}>Signataire</label>
+                <input className="input" value={agrEditPresident} onChange={e=>setAgrEditPresident(e.target.value)} placeholder={wordCfg.president||'Le Président'}/>
+              </div>
               <label className="fl" style={{ marginBottom:6 }}>Départements concernés <span style={{ color:'#94a3b8', fontWeight:400 }}>(Ctrl/Cmd pour sélection multiple)</span></label>
               <select className="select" multiple style={{ height:110 }} value={agrEditDepts} onChange={e=>setAgrEditDepts([...e.target.selectedOptions].map(o=>o.value))}>
                 {DEPTS.map(d=><option key={d} value={d}>{d}</option>)}
@@ -2976,7 +3105,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
             <button className={`tab ${mode==='preimprime'?'active':''}`} onClick={()=>setCalMode('preimprime')}>Pré-imprimé</button>
           </>}
           <button className="btn btn-orange btn-sm" style={{ marginLeft:'auto' }} onClick={saveDiplomaTpl}>💾 Enregistrer</button>
-          <button className="btn btn-outline btn-sm" onClick={()=>{ if(confirm('Réinitialiser ce gabarit aux positions par défaut ?')) setDiplomaTpl(p=>({ ...p, [calGabarit]:JSON.parse(JSON.stringify(DEFAULT_DIPLOMA_TEMPLATES[calGabarit])) })); }}>↺ Défaut</button>
+          <button className="btn btn-outline btn-sm" onClick={()=>confirm('Réinitialiser le gabarit', 'Réinitialiser ce gabarit aux positions par défaut ?', ()=>setDiplomaTpl(p=>({ ...p, [calGabarit]:JSON.parse(JSON.stringify(DEFAULT_DIPLOMA_TEMPLATES[calGabarit])) })))}>↺ Défaut</button>
         </div>
         <div style={{ display:'flex', gap:16, flexWrap:'wrap', alignItems:'flex-start' }}>
           <div className="dip-print">{diplomaBox(calGabarit, mode, DIPLOMA_SAMPLE, true)}</div>
@@ -3085,6 +3214,37 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
   const H2 = { fontFamily:'Playfair Display,serif', fontSize:15, color:'#1B3764', fontWeight:600, marginBottom:12 };
 
   // ── Page de connexion ─────────────────────────────────────────────────────
+  // ── Route d'impression headless (agent) : rend les diplômes calibrés, sans connexion ni habillage ──
+  if (printRoute) {
+    const list = requests.filter(r => {
+      if (r.statut !== 'diplome_emis') return false;
+      const cat = r.medalType?.category || '';
+      if (cat.startsWith('gm_')) return false; // grandes médailles : impression manuelle
+      if (printRoute.dept && r.dept !== printRoute.dept) return false;
+      if (printRoute.type === 'temoignage') return cat === 'temoignage';
+      if (printRoute.type === 'medaille') return cat !== 'temoignage';
+      return true;
+    });
+    const pagesHtml = list.map(r => {
+      const gabarit = MEDAL_TO_GABARIT[r.medalType.id] || 'medaille';
+      const agrafeNom = (r.agrafeDepts || []).map(id => agrafes.find(a => a.id === id)?.nom).filter(Boolean).join(', ');
+      const values = {
+        niveau: r.medalType.shortLabel || '',
+        nom: `${r.benevole.prenom} ${r.benevole.nom}`,
+        date: diplomaDateFr(r),
+        numero: r.diplomeId || '—',
+        agrafe: agrafeNom || '',
+      };
+      return diplomaPageHtml(diplomaTpl, gabarit, printRoute.mode, values);
+    }).join('');
+    return (
+      <div id="print-root" data-ready={dbLoading ? '0' : '1'} data-count={list.length}>
+        <style>{`@page{size:A4 landscape;margin:0} html,body{margin:0;padding:0;background:#fff} #print-root .page{position:relative;width:297mm;height:210mm;overflow:hidden;background:#fff;page-break-after:always}`}</style>
+        <div dangerouslySetInnerHTML={{ __html: pagesHtml }} />
+      </div>
+    );
+  }
+
   if (!authUser && !dbLoading) return (
     <div style={{ minHeight:'100vh', background:'linear-gradient(160deg,#1B3764 0%,#0f2347 55%,#E87722 100%)', display:'flex', alignItems:'center', justifyContent:'center', padding:24 }}>
       <div style={{ background:'white', borderRadius:20, padding:40, width:'100%', maxWidth:420, boxShadow:'0 24px 60px rgba(0,0,0,0.3)' }}>
@@ -3506,68 +3666,3 @@ function ReqRow({ req, onSelect, showLate = true }) {
 }
 
 
-// Rendu d'un diplôme calibré (lecture seule) — A4 paysage à 96dpi (1122px)
-function renderDiplomaCanvas(templates, gabarit, mode, values) {
-  const W = 1122;
-  const t = templates?.[gabarit];
-  if (!t) return <div className="diploma-canvas" style={{ width:W, height:W*8.27/11.69, background:'#fff', display:'flex', alignItems:'center', justifyContent:'center', color:'#94a3b8' }}>Gabarit « {gabarit} » non défini</div>;
-  const showBg = mode === 'complet' && t.hasComplet;
-  return (
-    <div className="diploma-canvas" style={{ position:'relative', width:W, height:W*8.27/11.69,
-      background: showBg ? `#fff url(/diplomas/${gabarit}-complet.jpg) 0 0/100% 100% no-repeat` : '#fff' }}>
-      {Object.entries(t.fields).map(([k,f]) => (
-        <div key={k} style={{ position:'absolute', left:`${f.x}%`, top:`${f.y}%`, width:`${f.w}%`,
-          fontSize:ptToPx(f.size, W), color:f.color, fontWeight:700, lineHeight:1, whiteSpace:'nowrap',
-          display:'flex', justifyContent: f.align==='center' ? 'center' : 'flex-start',
-          fontFamily:(f.font||'Arial')+', Helvetica, sans-serif' }}>
-          {values[k] ?? ''}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function diplomaDateFr(req) {
-  const h = req.historique?.find(x => /imprim|émis|emis/i.test(x.action || ''));
-  const d = h?.date ? new Date(h.date) : new Date();
-  try { return d.toLocaleDateString('fr-FR', { day:'numeric', month:'long', year:'numeric' }); }
-  catch { return new Date().toLocaleDateString('fr-FR'); }
-}
-
-function DiplomaModal({ req, templates, agrafes, tarif, onClose }) {
-  useEffect(() => { document.body.classList.add('diploma-printing'); return () => document.body.classList.remove('diploma-printing'); }, []);
-  const printMode = req._printMode || 'full';
-  const mode = printMode === 'template' ? 'preimprime' : 'complet';
-  const gabarit = req._gabarit || MEDAL_TO_GABARIT[req.medalType.id] || 'medaille';
-  const t = templates?.[gabarit];
-  const agrafeNom = (req.agrafeDepts || []).map(id => (agrafes||[]).find(a => a.id === id)?.nom).filter(Boolean).join(', ');
-  const values = {
-    niveau: req.medalType.shortLabel || '',
-    nom: `${req.benevole.prenom} ${req.benevole.nom}`,
-    date: diplomaDateFr(req),
-    numero: req.diplomeId || '—',
-    agrafe: agrafeNom || '',
-  };
-  return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div style={{ maxWidth:760, width:'100%', background:'white', borderRadius:16, overflow:'hidden', maxHeight:'92vh', display:'flex', flexDirection:'column' }} onClick={e=>e.stopPropagation()}>
-        <div className="no-print" style={{ padding:'12px 18px', background:'#1B3764', display:'flex', justifyContent:'space-between', alignItems:'center', borderBottom:'2px solid #E87722' }}>
-          <span style={{ color:'#E87722', fontFamily:'Playfair Display,serif', fontWeight:700, fontSize:14 }}>{mode==='complet'?'🎖 Diplôme complet':'📄 Pré-imprimé'} — {req.medalType.label}</span>
-          <div style={{ display:'flex', gap:8 }}>
-            <button className="btn btn-orange btn-sm" onClick={()=>window.print()}>{mode==='complet'?'🖨 Imprimer / PDF':'🖨 Imprimer'}</button>
-            <button onClick={onClose} style={{ background:'rgba(255,255,255,0.1)', border:'none', color:'white', cursor:'pointer', borderRadius:6, padding:'5px 10px', fontSize:12 }}>✕</button>
-          </div>
-        </div>
-        <div style={{ padding:18, background:'#eef2f7', overflow:'auto' }}>
-          <div className="diploma-print">
-            <div className="diploma-scale">
-              {renderDiplomaCanvas(templates, gabarit, mode, values)}
-            </div>
-          </div>
-          {mode==='complet' && !t?.hasComplet && <p className="no-print" style={{ fontSize:12, color:'#b45309', marginTop:10 }}>⚠️ Ce gabarit n'a pas de fond « complet » — bascule en pré-imprimé.</p>}
-          <p className="no-print" style={{ fontSize:11, color:'#94a3b8', marginTop:10 }}>Positions issues du Calibrage diplômes. {mode==='complet'?'« Imprimer / PDF » → choisis « Enregistrer en PDF » et orientation Paysage dans le dialogue.':'À imprimer sur le diplôme pré-imprimé (orientation Paysage).'}</p>
-        </div>
-      </div>
-    </div>
-  );
-}

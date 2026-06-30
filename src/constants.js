@@ -112,15 +112,18 @@ const DEFAULT_DIPLOMA_TEMPLATES = {
     niveau:{x:52.7,y:53.2,w:25.4,size:24,color:'#E8771F',align:'left'},
     nom:{x:0,y:60.4,w:100,size:24,color:'#111111',align:'center'},
     date:{x:26.4,y:82.6,w:18,size:14,color:'#111111',align:'left'},
-    numero:{x:34.6,y:94.3,w:24,size:12,color:'#111111',align:'left'} } },
+    numero:{x:34.6,y:94.3,w:24,size:12,color:'#111111',align:'left'},
+    agrafe:{x:0,y:68,w:100,size:16,color:'#E8771F',align:'center'} } },
   gm_argent: { label:'Grande Médaille — Échelon Argent', hasComplet:true, fields:{
     nom:{x:0,y:57.86,w:100,size:24,color:'#111111',align:'center'},
     date:{x:22.36,y:80.14,w:16,size:16,color:'#111111',align:'left'},
-    numero:{x:29.23,y:90.24,w:24,size:12,color:'#111111',align:'left'} } },
+    numero:{x:29.23,y:90.24,w:24,size:12,color:'#111111',align:'left'},
+    agrafe:{x:0,y:66,w:100,size:16,color:'#E8771F',align:'center'} } },
   gm_or:     { label:'Grande Médaille — Échelon Or', hasComplet:true, fields:{
     nom:{x:0,y:57.86,w:100,size:24,color:'#111111',align:'center'},
     date:{x:22.35,y:80.12,w:16,size:16,color:'#111111',align:'left'},
-    numero:{x:29.21,y:90.25,w:24,size:12,color:'#111111',align:'left'} } },
+    numero:{x:29.21,y:90.25,w:24,size:12,color:'#111111',align:'left'},
+    agrafe:{x:0,y:66,w:100,size:16,color:'#E8771F',align:'center'} } },
   temoignage:{ label:'Témoignage de Reconnaissance', hasComplet:true, fields:{
     nom:{x:0,y:50.5,w:100,size:24,color:'#111111',align:'center'},
     date:{x:22.46,y:80.13,w:16,size:16,color:'#111111',align:'left'},
