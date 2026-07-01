@@ -33,7 +33,7 @@ class ErrorBoundary extends React.Component {
 export { ErrorBoundary };
 
 const APP_TITLE   = "Demande Médaille FNPC";
-const APP_VERSION = "1.6.6";
+const APP_VERSION = "1.6.7";
 const USE_SUPABASE = true;
 
 // ── PrestaShop Webservice ────────────────────────────────────────────────────
@@ -558,7 +558,7 @@ export default function App() {
   }, [role, authUser, groupements]);
 
   const lockedDept = (role === 'antenne')
-    ? (authUser?.dept || null)
+    ? (authUser?.dept || (authUser?.role === 'gestion' ? ROLES[role]?.dept : null))
     : (role === 'departement')
       ? (myDepts.length === 1 ? myDepts[0] : null)
       : null;
@@ -1842,7 +1842,8 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
                   const late = !special && (r.benevole.ans < r.medalType.years);
                   const alreadyVoted = role==='commission' && (r.commissionVotes||[]).includes(voter);
                   return (
-                    <tr key={r.id} style={{ borderBottom:'1px solid #f1f5f9' }}>
+                    <React.Fragment key={r.id}>
+                    <tr style={{ borderBottom: r.justification?'none':'1px solid #f1f5f9' }}>
                       <td style={TD}><span style={{ fontFamily:'monospace', fontSize:11, color:'#64748b' }}>{r.id}</span></td>
                       <td style={{ ...TD, fontWeight:700, color:'#1B3764' }}>{recipientName(r.benevole)}</td>
                       <td style={{ ...TD, color:'#64748b' }}>{r.benevole.antenne||'—'}</td>
@@ -1860,6 +1861,8 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
                         </div>
                       </td>
                     </tr>
+                    {r.justification && <tr style={{ borderBottom:'1px solid #f1f5f9' }}><td/><td colSpan={role==='commission'?7:6} style={{ padding:'0 10px 10px', fontSize:12, color:'#64748b', lineHeight:1.5 }}><strong style={{ color:'#1B3764' }}>Motivation :</strong> {r.justification}</td></tr>}
+                    </React.Fragment>
                   );
                 })}
               </tbody>
@@ -3363,7 +3366,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
     { id:'demandes', icon:'📋', label:'Demandes', badge:role==='departement'?stats.toValDept:role==='antenne'?stats.toValAntenne:role==='commission'?stats.toValComm:null },
     ...(role==='departement'&&stats.tdrEnAttentePaiement>0?[{ id:'tdr_paiement', icon:'💳', label:'TDR à payer', badge:stats.tdrEnAttentePaiement }]:[]),
     ...(canCreate?[{ id:'nouvelle', icon:'✚', label:'Nouvelle demande' }]:[]),
-    ...(['antenne','departement','commission'].includes(role)?[{ id:'validation_table', icon:'☑️', label:'Validation (tableau)', badge:(role==='antenne'?stats.toValAntenne:role==='departement'?stats.toValDept:stats.toValComm)||null }]:[]),
+    ...(role==='commission'?[{ id:'validation_table', icon:'☑️', label:'Validation (tableau)', badge:stats.toValComm||null }]:[]),
     ...(['antenne','departement','gestion'].includes(role)?[{ id:'statistiques', icon:'📈', label:'Statistiques' }]:[]),
     ...(role==='commission'?[{ id:'validation_rapide', icon:'⚡', label:'Validation rapide', badge:requests.filter(r=>r.statut==='en_commission'&&r.benevole.ans>=r.medalType.years).length||null }]:[]),
     ...(role==='gestion'?[
