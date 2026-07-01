@@ -33,7 +33,7 @@ class ErrorBoundary extends React.Component {
 export { ErrorBoundary };
 
 const APP_TITLE   = "Demande Médaille FNPC";
-const APP_VERSION = "1.6.14";
+const APP_VERSION = "1.6.15";
 const USE_SUPABASE = true;
 
 // ── PrestaShop Webservice ────────────────────────────────────────────────────
@@ -563,7 +563,7 @@ export default function App() {
   const lockedDept = (role === 'antenne')
     ? (authUser?.dept || (authUser?.role === 'gestion' ? ROLES[role]?.dept : null))
     : (role === 'departement')
-      ? (authUser?.dept || (myDepts.length === 1 ? myDepts[0] : null))
+      ? (authUser?.dept || (myDepts.length === 1 ? myDepts[0] : (authUser?.role === 'gestion' ? ROLES[role]?.dept : null)))
       : null;
 
   // Droit de créer un diplôme d'antenne : Gestion toujours, sinon département autorisé
@@ -1014,7 +1014,8 @@ export default function App() {
     if (!a.nom && !a.adresse) { fire(`Aucune adresse configurée pour ${dept} (Paramètres APC → Adresse)`, 'err'); return; }
     const w = window.open('', 'bordereau_fnpc', 'width=820,height=920,menubar=no,toolbar=no');
     if (!w) { fire('Fenêtre bloquée — autorisez les pop-ups pour ce site', 'err'); return; }
-    const recipient = [a.nom, a.adresse, `${a.cp || ''} ${a.ville || ''}`.trim()].filter(Boolean).join('<br>');
+    const recipient = [a.nom, a.adresse, `${a.cp || ''} ${a.ville || ''}`.trim()].filter(Boolean).join('<br>')
+      + (a.infos ? `<br><span style="font-size:14px;font-weight:normal;color:#555">${a.infos}</span>` : '');
     const dateFr = new Date().toLocaleDateString('fr-FR');
     const rows = (list || []).map(r =>
       `<tr><td>${recipientName(r.benevole)}</td><td>${r.medalType.label}</td><td>${r.diplomeId || ''}</td></tr>`
@@ -1693,8 +1694,9 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
           <div className="st">1. Identification du demandeur</div>
           <div style={{ background:'#f0fdf4', border:'1px solid #86efac', borderRadius:8, padding:'9px 12px', marginBottom:10, fontSize:12, color:'#065f46' }}>🔒 Informations issues de votre compte SSO — non modifiables.</div>
           <div className="fg"><label className="fl">E-mail</label><input className="input" value={nrEmail} readOnly style={{ background:'#f8faff', color:'#64748b' }}/></div>
-          {!lockedDept && role==='antenne' && authUser?.role==='antenne' && <div className="fg"><label className="fl">Association APC *</label><div style={{ background:'#fef2f2', border:'1px solid #fca5a5', borderRadius:8, padding:'10px 12px', fontSize:13, color:'#dc2626' }}>⚠️ Aucun département n'est rattaché à votre compte. Contactez la Gestion FNPC pour le configurer — la soumission est impossible sans cela.</div></div>}
-          {!lockedDept && !(role==='antenne' && authUser?.role==='antenne') && <div className="fg"><label className="fl">Association APC *</label><select className="select" value={nrDept} onChange={e=>setNrDept(e.target.value)}><option value="">— Département —</option>{(role==='departement'?myDepts:DEPTS).map(d=><option key={d} value={d}>{d}</option>)}</select></div>}
+          {!lockedDept && ((role==='antenne' && authUser?.role==='antenne') || (role==='departement' && myDepts.length===0)) && <div className="fg"><label className="fl">Association APC *</label><div style={{ background:'#fef2f2', border:'1px solid #fca5a5', borderRadius:8, padding:'10px 12px', fontSize:13, color:'#dc2626' }}>⚠️ Aucun département n'est rattaché à votre compte. Contactez la Gestion FNPC pour le configurer — la soumission est impossible sans cela.</div></div>}
+          {!lockedDept && role==='departement' && myDepts.length>1 && authUser?.role!=='gestion' && <div className="fg"><label className="fl">Association APC * <span style={{ color:'#94a3b8', fontSize:11, fontWeight:400 }}>(groupement — {myDepts.length} départements)</span></label><select className="select" value={nrDept} onChange={e=>setNrDept(e.target.value)}><option value="">— Département —</option>{myDepts.map(d=><option key={d} value={d}>{d}</option>)}</select></div>}
+          {!lockedDept && !(role==='departement') && !(role==='antenne' && authUser?.role==='antenne') && <div className="fg"><label className="fl">Association APC *</label><select className="select" value={nrDept} onChange={e=>setNrDept(e.target.value)}><option value="">— Département —</option>{DEPTS.map(d=><option key={d} value={d}>{d}</option>)}</select></div>}
           {lockedDept && <div className="fg"><label className="fl">Association APC</label><input className="input" value={lockedDept} readOnly style={{ background:'#f8faff', color:'#64748b' }}/></div>}
           <div className="fg" style={{ marginBottom:0 }}><label className="fl">Demandeur</label><input className="input" value={nrDemandeur} readOnly style={{ background:'#f8faff', color:'#64748b' }}/></div>
         </div>
@@ -1810,7 +1812,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
           <div className="card" style={{ marginBottom:20 }}>
             <div className="st">5. Date de réception souhaitée</div>
             <input className="input" type="date" value={nrDateRecep} onChange={e=>setNrDateRecep(e.target.value)} style={{ maxWidth:220 }}/>
-            {(()=>{ const dept=lockedDept||nrDept||vol.dept; const addr=deptAddresses[dept]; const s=addr?`${addr.nom}, ${addr.adresse}, ${addr.cp} ${addr.ville}`:'Non configurée'; return <p className="fh" style={{ marginTop:6 }}>Le diplôme sera expédié à : <strong>{s}</strong></p>; })()}
+            {(()=>{ const dept=lockedDept||nrDept||vol.dept; const addr=deptAddresses[dept]; const s=addr?`${addr.nom}, ${addr.adresse}, ${addr.cp} ${addr.ville}${addr.infos?` — ${addr.infos}`:''}`:'Non configurée'; return <p className="fh" style={{ marginTop:6 }}>Le diplôme sera expédié à : <strong>{s}</strong></p>; })()}
           </div>
           {role==='departement'&&!editReqId&&<div style={{ background:'#f0fdf4', border:'1px solid #86efac', borderRadius:8, padding:'9px 14px', marginBottom:12, fontSize:13, color:'#065f46' }}>ℹ️ <strong>En tant que Président APC</strong>, votre demande sera transmise <strong>directement en Commission FNPC</strong> sans validation intermédiaire.</div>}
           {editReqId&&<div style={{ background:'#FFF4E8', border:'1px solid #E87722', borderRadius:8, padding:'9px 14px', marginBottom:12, fontSize:13, color:'#C45A00' }}>✏️ Modification de la demande <strong>{editReqId}</strong> — soumettez pour la renvoyer, ou enregistrez en brouillon pour continuer plus tard.</div>}
@@ -1860,17 +1862,17 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
                       <td style={{ ...TD, color:'#64748b' }}>{r.benevole.antenne||'—'}</td>
                       <td style={TD}><span style={{ display:'inline-flex', alignItems:'center', gap:5 }}><span style={{ width:8, height:8, borderRadius:'50%', background:r.medalType.color }}/>{r.medalType.shortLabel}{r.agrafe?' 🏅':''}</span></td>
                       <td style={TD}>{special ? '—' : late ? <span style={{ color:'#f59e0b', fontWeight:700 }}>⚡ {r.benevole.ans} ans</span> : <span style={{ color:'#059669', fontWeight:600 }}>{r.benevole.ans} ans</span>}</td>
-                      <td style={{ ...TD, color:'#64748b', fontSize:12, maxWidth:200 }}>{r.benevole.fonctions||'—'}</td>
-                      <td style={{ ...TD, color:'#64748b', fontSize:12, maxWidth:200 }}>{r.benevole.distinctions||'—'}</td>
-                      <td style={{ ...TD, color:'#374151', fontSize:12, maxWidth:260, whiteSpace:'normal', lineHeight:1.4 }}>{r.justification||'—'}</td>
+                      <td style={{ ...TD, color:'#64748b', fontSize:12, maxWidth:180, whiteSpace:'normal', wordBreak:'break-word', overflowWrap:'anywhere', lineHeight:1.4 }}>{r.benevole.fonctions||'—'}</td>
+                      <td style={{ ...TD, color:'#64748b', fontSize:12, maxWidth:180, whiteSpace:'normal', wordBreak:'break-word', overflowWrap:'anywhere', lineHeight:1.4 }}>{r.benevole.distinctions||'—'}</td>
+                      <td style={{ ...TD, color:'#374151', fontSize:12, maxWidth:280, whiteSpace:'normal', wordBreak:'break-word', overflowWrap:'anywhere', lineHeight:1.4 }}>{r.justification||'—'}</td>
                       {role==='commission'&&<td style={{ ...TD, fontWeight:700, color:(r.commissionVotes?.length||0)>0?'#059669':'#94a3b8' }}>{(r.commissionVotes?.length||0)}/2</td>}
-                      <td style={TD}>
-                        <div style={{ display:'flex', gap:6 }}>
+                      <td style={{ ...TD, whiteSpace:'nowrap', width:96 }}>
+                        <div style={{ display:'flex', gap:4 }}>
                           {alreadyVoted
                             ? <span style={{ fontSize:11, color:'#94a3b8', fontWeight:600, alignSelf:'center' }}>✓ voté</span>
-                            : <button className="btn btn-success btn-sm" onClick={()=>doValidate(r)} title="Valider">✓</button>}
-                          <button className="btn btn-danger btn-sm" onClick={()=>setRefuseModal(r)}>✗</button>
-                          <button className="btn btn-outline btn-sm" onClick={()=>setSelected(r)}>Détails</button>
+                            : <button className="btn btn-success" style={{ padding:'4px 8px', fontSize:13, lineHeight:1 }} onClick={()=>doValidate(r)} title="Valider">✓</button>}
+                          <button className="btn btn-danger" style={{ padding:'4px 8px', fontSize:13, lineHeight:1 }} onClick={()=>setRefuseModal(r)} title="Refuser">✗</button>
+                          <button className="btn btn-outline" style={{ padding:'4px 8px', fontSize:13, lineHeight:1 }} onClick={()=>setSelected(r)} title="Voir les détails">👁</button>
                         </div>
                       </td>
                     </tr>
@@ -2044,12 +2046,12 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
           <div className="st">{dept}</div>
           <div className="fg"><label className="fl">Nom de l'association</label><input className="input" placeholder="APC Département XX" value={adrNom} onChange={e=>setAdrNom(e.target.value)}/></div>
           <div className="fg"><label className="fl">Adresse de réception APC</label><input className="input" placeholder="N° rue, nom de la rue" value={adrAdresse} onChange={e=>setAdrAdresse(e.target.value)}/></div>
+          <div className="fg"><label className="fl">Informations complémentaires <span style={{ color:'#94a3b8', fontSize:11 }}>(apparaîtront sous l'adresse sur le bordereau d'expédition)</span></label><input className="input" placeholder="Bâtiment, étage, à l'attention de, horaires…" value={adrInfos} onChange={e=>setAdrInfos(e.target.value)}/></div>
           <div className="g2">
             <div className="fg"><label className="fl">Code postal</label><input className="input" placeholder="75000" value={adrCp} onChange={e=>setAdrCp(e.target.value)}/></div>
             <div className="fg"><label className="fl">Ville</label><input className="input" placeholder="Paris" value={adrVille} onChange={e=>setAdrVille(e.target.value)}/></div>
           </div>
           <div className="fg"><label className="fl">Email APC <span style={{ color:'#94a3b8', fontSize:11 }}>(utilisé pour la recherche PrestaShop si pas d'ID client)</span></label><input className="input" type="email" placeholder="apc.dept@protection-civile.org" value={adrEmail} onChange={e=>setAdrEmail(e.target.value)}/></div>
-          <div className="fg"><label className="fl">Informations complémentaires</label><input className="input" placeholder="Bâtiment, étage, à l'attention de, horaires…" value={adrInfos} onChange={e=>setAdrInfos(e.target.value)}/></div>
           {role==='gestion' && <div className="fg">
             <label className="fl">
               ID client PrestaShop{' '}
@@ -2061,7 +2063,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
           </div>}
           {adrNom && adrAdresse && adrCp && adrVille && (
             <div style={{ background:'#f0fdf4', border:'1px solid #86efac', borderRadius:8, padding:'9px 12px', marginBottom:12, fontSize:13, color:'#065f46' }}>
-              📬 {adrNom}, {adrAdresse}, {adrCp} {adrVille}
+              📬 {adrNom}, {adrAdresse}, {adrCp} {adrVille}{adrInfos ? <span style={{ color:'#059669' }}> — {adrInfos}</span> : null}
             </div>
           )}
 {role==='gestion' && <div style={{ marginTop:14, paddingTop:14, borderTop:'1px solid #e5e7eb' }}>
