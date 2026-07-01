@@ -33,7 +33,7 @@ class ErrorBoundary extends React.Component {
 export { ErrorBoundary };
 
 const APP_TITLE   = "Demande Médaille FNPC";
-const APP_VERSION = "1.6.8";
+const APP_VERSION = "1.6.10";
 const USE_SUPABASE = true;
 
 // ── PrestaShop Webservice ────────────────────────────────────────────────────
@@ -288,6 +288,7 @@ export default function App() {
   ]);
   const [filterYear, setFilterYear] = useState('all');
   const [quickValConfirm, setQuickValConfirm] = useState(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   // Modale de confirmation générique { title, message, onConfirm, danger }
   const [confirmModal, setConfirmModal] = useState(null);
   const confirm = (title, message, onConfirm, danger = true, labels = null) => setConfirmModal({ title, message, onConfirm, danger, labels });
@@ -1834,7 +1835,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
           : <div className="card" style={{ overflowX:'auto', padding:0 }}>
             <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
               <thead><tr style={{ background:'#f8faff', color:'#1B3764', textAlign:'left' }}>
-                <th style={TH}>Récipiendaire</th><th style={TH}>Antenne</th><th style={TH}>Distinction</th><th style={TH}>Dépt</th><th style={TH}>Ancienneté</th><th style={TH}>Compétence</th><th style={TH}>Récompenses obtenues</th>{role==='commission'&&<th style={TH}>Votes</th>}<th style={TH}>Actions</th>
+                <th style={TH}>Récipiendaire</th><th style={TH}>Dépt</th><th style={TH}>Antenne</th><th style={TH}>Distinction</th><th style={TH}>Ancienneté</th><th style={TH}>Compétence</th><th style={TH}>Récompenses obtenues</th>{role==='commission'&&<th style={TH}>Votes</th>}<th style={TH}>Actions</th>
               </tr></thead>
               <tbody>
                 {pending.map(r=>{
@@ -1845,9 +1846,9 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
                     <React.Fragment key={r.id}>
                     <tr style={{ borderBottom: r.justification?'none':'1px solid #f1f5f9' }}>
                       <td style={{ ...TD, fontWeight:700, color:'#1B3764' }}>{recipientName(r.benevole)}</td>
+                      <td style={{ ...TD, color:'#64748b', fontWeight:600 }}>{(r.dept||'').split(' ')[0]}</td>
                       <td style={{ ...TD, color:'#64748b' }}>{r.benevole.antenne||'—'}</td>
                       <td style={TD}><span style={{ display:'inline-flex', alignItems:'center', gap:5 }}><span style={{ width:8, height:8, borderRadius:'50%', background:r.medalType.color }}/>{r.medalType.shortLabel}{r.agrafe?' 🏅':''}</span></td>
-                      <td style={{ ...TD, color:'#64748b', fontWeight:600 }}>{(r.dept||'').split(' ')[0]}</td>
                       <td style={TD}>{special ? '—' : late ? <span style={{ color:'#f59e0b', fontWeight:700 }}>⚡ {r.benevole.ans} ans</span> : <span style={{ color:'#059669', fontWeight:600 }}>{r.benevole.ans} ans</span>}</td>
                       <td style={{ ...TD, color:'#64748b', fontSize:12, maxWidth:200 }}>{r.benevole.fonctions||'—'}</td>
                       <td style={{ ...TD, color:'#64748b', fontSize:12, maxWidth:200 }}>{r.benevole.distinctions||'—'}</td>
@@ -1858,7 +1859,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
                             ? <span style={{ fontSize:11, color:'#94a3b8', fontWeight:600, alignSelf:'center' }}>✓ voté</span>
                             : <button className="btn btn-success btn-sm" onClick={()=>doValidate(r)} title="Valider">✓</button>}
                           <button className="btn btn-danger btn-sm" onClick={()=>setRefuseModal(r)}>✗</button>
-                          <button className="btn btn-outline btn-sm" onClick={()=>setSelected(r)}>Détail</button>
+                          <button className="btn btn-outline btn-sm" onClick={()=>setSelected(r)}>détails</button>
                         </div>
                       </td>
                     </tr>
@@ -2123,7 +2124,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
         {/* Niveau antenne désactivé par département */}
         <div className="card">
           <div className="st">🚫 Désactiver le niveau antenne par département</div>
-          <p style={{ fontSize:13, color:'#64748b', marginBottom:12 }}>Dans les départements ci-dessous, les <strong>antennes ne peuvent pas soumettre</strong> de demande (les dossiers sont créés directement par l'APC).</p>
+          <p style={{ fontSize:13, color:'#64748b', marginBottom:12 }}>Le niveau antenne est actif par défaut. Désactivez-le pour les départements où les <strong>antennes ne soumettent pas</strong> (les dossiers sont alors créés directement par l'APC).</p>
           <div style={{ display:'flex', gap:8, marginBottom:12 }}>
             <select className="select" value={antLvlAddDept} onChange={e=>setAntLvlAddDept(e.target.value)} style={{ flex:1 }}>
               <option value="">— Choisir un département —</option>
@@ -2393,6 +2394,21 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
       <div style={{ maxWidth:760 }}>
         <h1 style={H1}>Notifications & E-mails</h1>
         <p style={{ color:'#64748b', fontSize:14, marginBottom:20 }}>Activez ou désactivez chaque type de notification, et personnalisez le modèle d'e-mail correspondant.</p>
+
+        <div className="card" style={{ marginBottom:18, background:'#f8faff', border:'1px solid #dbeafe' }}>
+          <div className="st" style={{ color:'#1B3764' }}>ℹ️ Logique d'envoi des e-mails</div>
+          <p style={{ fontSize:13, color:'#374151', lineHeight:1.6, marginBottom:8 }}>Un e-mail ne part que si <strong>3 conditions</strong> sont réunies : (1) le type de notification est <strong>activé</strong> ci-dessous, (2) la demande concernée a l'option <strong>Notifications</strong> cochée, et (3) le serveur d'envoi <strong>SMTP</strong> est configuré sur Netlify (variables <code>SMTP_*</code>). Sans SMTP, l'aperçu fonctionne mais rien n'est réellement envoyé.</p>
+          <div style={{ fontSize:13, color:'#374151', lineHeight:1.7 }}>
+            <strong>Quel e-mail, à quel moment :</strong>
+            <ul style={{ margin:'6px 0 0', paddingLeft:20 }}>
+              <li><strong>Diplôme imprimé</strong> — quand la Commission approuve un dossier <em>non payant</em> (validation 2/2), ou après réception du paiement d'un témoignage.</li>
+              <li><strong>Dossier approuvé Commission</strong> — pour un <em>témoignage payant</em> validé (2/2) : informe qu'un paiement est requis avant impression.</li>
+              <li><strong>Paiement TDR requis</strong> — relance de paiement pour un témoignage.</li>
+              <li><strong>Diplôme expédié</strong> — quand le diplôme est marqué expédié.</li>
+            </ul>
+          </div>
+          <p style={{ fontSize:12, color:'#94a3b8', marginTop:8 }}>Destinataire : l'e-mail du demandeur enregistré sur la demande. La mise en page reprend le modèle FNPC (en-tête bleu + barre orange) personnalisable plus bas.</p>
+        </div>
 
         {/* Tableau des notifications avec toggle + lien édition */}
         <div className="card" style={{ marginBottom:18 }}>
@@ -3520,8 +3536,14 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
 
       <div style={{ display:'flex', flex:1, overflow:'hidden' }}>
         {/* SIDEBAR */}
-        <aside style={{ width:214, background:'#0E2247', padding:'18px 8px', flexShrink:0, overflowY:'auto' }}>
-          <div style={{ color:'#475569', fontSize:10, letterSpacing:'2px', textTransform:'uppercase', padding:'0 10px', marginBottom:6 }}>Menu</div>
+        {sidebarCollapsed && <div style={{ width:40, background:'#0E2247', flexShrink:0, padding:'14px 0', display:'flex', justifyContent:'center', alignItems:'flex-start' }}>
+          <button onClick={()=>setSidebarCollapsed(false)} title="Afficher le menu" style={{ background:'none', border:'none', color:'#fff', fontSize:18, cursor:'pointer' }}>☰</button>
+        </div>}
+        {!sidebarCollapsed && <aside style={{ width:214, background:'#0E2247', padding:'18px 8px', flexShrink:0, overflowY:'auto' }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'0 10px', marginBottom:6 }}>
+            <span style={{ color:'#475569', fontSize:10, letterSpacing:'2px', textTransform:'uppercase' }}>Menu</span>
+            <button onClick={()=>setSidebarCollapsed(true)} title="Réduire le menu" style={{ background:'none', border:'none', color:'#94a3b8', fontSize:16, cursor:'pointer', lineHeight:1 }}>«</button>
+          </div>
           {sideItems.map(item=>(
             <div key={item.id} className={`nav-item ${page===item.id?'active':''}`} onClick={()=>{ if(item.id==='demandes') setFilterStatus('all'); setPage(item.id); }}>
               <span style={{ width:16, textAlign:'center', fontSize:13 }}>{item.icon}</span>
@@ -3557,7 +3579,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
               </div>
             ))}
           </div>
-        </aside>
+        </aside>}
 
         <main style={{ flex:1, overflow:'auto', padding:22 }}>
           {renderPage()}
