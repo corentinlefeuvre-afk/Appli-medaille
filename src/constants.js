@@ -71,6 +71,13 @@ const MOCK_VOLUNTEERS = [
 ];
 
 const today = () => new Date().toISOString().split('T')[0];
+// Types de récipiendaire « spéciaux » (au-delà du bénévole), activables par département.
+const SPECIAL_RECIPIENT_TYPES = [
+  { id:'antenne', label:'Antenne', icon:'🏢', placeholder:'Ex : Antenne Paris 12ème' },
+  { id:'chien',   label:'Chien',   icon:'🐕', placeholder:'Ex : Rex — équipe cynophile' },
+];
+// Nom à afficher : pour un type spécial (antenne, chien…) c'est le nom saisi ; sinon « Prénom NOM ».
+const recipientName = (b) => (b && b.type && b.type !== 'benevole') ? (b.nom || '') : `${(b && b.prenom) || ''} ${(b && b.nom) || ''}`.trim();
 const daysSince = (d) => Math.floor((new Date() - new Date(d)) / 86400000);
 
 const getDeptCode = (dept) => {
@@ -176,5 +183,5 @@ const ptToPx = (pt, w=DIPLOMA_PAGE_W) => pt * w / 841.68;
 const FONT_OPTIONS = ['Arial','Helvetica','Times New Roman','Georgia','Garamond','Verdana','Trebuchet MS','Calibri','Courier New','Playfair Display'];
 
 export {
-  DEPTS, MEDAL_TYPES, STATUSES, ROLES, MOCK_VOLUNTEERS, today, daysSince, getDeptCode, generateDiplomaNumber, getNextMedalSuggestion, DEFAULT_EMAIL_TEMPLATES, DEFAULT_DIPLOMA_TEMPLATES, DIPLOMA_FIELD_LABELS, MEDAL_TO_GABARIT, DIPLOMA_SAMPLE, TOUR_STEPS, DEFAULT_AGRAFE_TEXTE, DEFAULT_LIST_INTRO, DEFAULT_WORD_CFG, DIPLOMA_PAGE_W, ptToPx, FONT_OPTIONS
+  DEPTS, MEDAL_TYPES, STATUSES, ROLES, MOCK_VOLUNTEERS, today, daysSince, getDeptCode, generateDiplomaNumber, getNextMedalSuggestion, recipientName, SPECIAL_RECIPIENT_TYPES, DEFAULT_EMAIL_TEMPLATES, DEFAULT_DIPLOMA_TEMPLATES, DIPLOMA_FIELD_LABELS, MEDAL_TO_GABARIT, DIPLOMA_SAMPLE, TOUR_STEPS, DEFAULT_AGRAFE_TEXTE, DEFAULT_LIST_INTRO, DEFAULT_WORD_CFG, DIPLOMA_PAGE_W, ptToPx, FONT_OPTIONS
 };

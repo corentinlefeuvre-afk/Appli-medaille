@@ -4,7 +4,7 @@ import { db } from './supabase.js';
 import { auth } from './auth.js';
 import { CSS, LOGO_SRC, FAV_SRC } from './assets.js';
 import {
-  DEPTS, MEDAL_TYPES, STATUSES, ROLES, MOCK_VOLUNTEERS, today, daysSince, getDeptCode, generateDiplomaNumber, getNextMedalSuggestion, DEFAULT_EMAIL_TEMPLATES, DEFAULT_DIPLOMA_TEMPLATES, DIPLOMA_FIELD_LABELS, MEDAL_TO_GABARIT, DIPLOMA_SAMPLE, TOUR_STEPS, DEFAULT_AGRAFE_TEXTE, DEFAULT_LIST_INTRO, DEFAULT_WORD_CFG, DIPLOMA_PAGE_W, ptToPx, FONT_OPTIONS
+  DEPTS, MEDAL_TYPES, STATUSES, ROLES, MOCK_VOLUNTEERS, today, daysSince, getDeptCode, generateDiplomaNumber, getNextMedalSuggestion, recipientName, SPECIAL_RECIPIENT_TYPES, DEFAULT_EMAIL_TEMPLATES, DEFAULT_DIPLOMA_TEMPLATES, DIPLOMA_FIELD_LABELS, MEDAL_TO_GABARIT, DIPLOMA_SAMPLE, TOUR_STEPS, DEFAULT_AGRAFE_TEXTE, DEFAULT_LIST_INTRO, DEFAULT_WORD_CFG, DIPLOMA_PAGE_W, ptToPx, FONT_OPTIONS
 } from './constants.js';
 import { diplomaDateFr, diplomaPageHtml, DiplomaModal } from './diploma.jsx';
 
@@ -33,7 +33,7 @@ class ErrorBoundary extends React.Component {
 export { ErrorBoundary };
 
 const APP_TITLE   = "Demande Médaille FNPC";
-const APP_VERSION = "1.5.2";
+const APP_VERSION = "1.6.6";
 const USE_SUPABASE = true;
 
 // ── PrestaShop Webservice ────────────────────────────────────────────────────
@@ -176,6 +176,19 @@ export default function App() {
         if (welcome_cfg) setWelcomeMessages(welcome_cfg);
         const deptDisabled_cfg = await db.loadConfig('dept_disabled');
         if (deptDisabled_cfg) setDeptDisabled(deptDisabled_cfg);
+        const std_cfg = await db.loadConfig('special_type_depts');
+        const stdMap = (std_cfg && typeof std_cfg === 'object' && !Array.isArray(std_cfg)) ? (std_cfg.v && typeof std_cfg.v==='object' ? std_cfg.v : std_cfg) : null;
+        if (stdMap && !Array.isArray(stdMap)) {
+          setSpecialTypeDepts(stdMap);
+        } else {
+          // migration depuis l'ancien réglage antenne_depts
+          const antDepts_cfg = await db.loadConfig('antenne_depts');
+          const antList = Array.isArray(antDepts_cfg) ? antDepts_cfg : (Array.isArray(antDepts_cfg?.v) ? antDepts_cfg.v : null);
+          if (antList) setSpecialTypeDepts({ antenne: antList });
+        }
+        const antOff_cfg = await db.loadConfig('antenne_level_off');
+        const antOffList = Array.isArray(antOff_cfg) ? antOff_cfg : (Array.isArray(antOff_cfg?.v) ? antOff_cfg.v : null);
+        if (antOffList) setAntenneLevelOff(antOffList);
         const emailTpl_cfg = await db.loadConfig('email_templates');
         if (emailTpl_cfg) setEmailTemplates({ ...DEFAULT_EMAIL_TEMPLATES, ...emailTpl_cfg }); // merge : on garde les nouveaux modèles par défaut
         const dipTpl_cfg = await db.loadConfig('diploma_templates');
@@ -253,6 +266,10 @@ export default function App() {
     '33 - Gironde':     { nom:'APC Gironde', adresse:'8 allée de Tourny', cp:'33000', ville:'Bordeaux' },
   });
   const [deptDisabled, setDeptDisabled] = useState({});
+  const [specialTypeDepts, setSpecialTypeDepts] = useState({}); // { typeId: [départements autorisés] }
+  const [stAdd, setStAdd] = useState({}); // sélection « ajouter dept » par type dans l'écran Gestion
+  const [antenneLevelOff, setAntenneLevelOff] = useState([]); // départements où le NIVEAU antenne est désactivé
+  const [antLvlAddDept, setAntLvlAddDept] = useState('');
   const [emailTemplates, setEmailTemplates] = useState(DEFAULT_EMAIL_TEMPLATES);
   const [tarif, setTarif]   = useState(2);
   const [commissionCanCreate, setCommissionCanCreate] = useState(false);
@@ -273,7 +290,7 @@ export default function App() {
   const [quickValConfirm, setQuickValConfirm] = useState(null);
   // Modale de confirmation générique { title, message, onConfirm, danger }
   const [confirmModal, setConfirmModal] = useState(null);
-  const confirm = (title, message, onConfirm, danger = true) => setConfirmModal({ title, message, onConfirm, danger });
+  const confirm = (title, message, onConfirm, danger = true, labels = null) => setConfirmModal({ title, message, onConfirm, danger, labels });
   const pageSize = 50;
   const [pageOffset, setPageOffset] = useState(0);
 
@@ -461,6 +478,14 @@ export default function App() {
   }, [deptDisabled]);
   useEffect(() => {
     if (!USE_SUPABASE || dbLoading || !dbConnected) return;
+    db.saveConfig('special_type_depts', specialTypeDepts);
+  }, [specialTypeDepts]);
+  useEffect(() => {
+    if (!USE_SUPABASE || dbLoading || !dbConnected) return;
+    db.saveConfig('antenne_level_off', antenneLevelOff);
+  }, [antenneLevelOff]);
+  useEffect(() => {
+    if (!USE_SUPABASE || dbLoading || !dbConnected) return;
     // Sync chaque département modifié
     Object.entries(deptAddresses).forEach(([code, data]) => db.upsertDepartment(code, data));
   }, [deptAddresses]);
@@ -473,6 +498,8 @@ export default function App() {
 
   // Nouvelle demande
   const [nrMode, setNrMode] = useState('registry');
+  const [nrType, setNrType] = useState('benevole'); // 'benevole' | 'antenne'
+  const [nrAntenneNom, setNrAntenneNom] = useState('');
   const [nrVolSearch, setNrVolSearch] = useState('');
   const [nrVol, setNrVol]   = useState(null);
   const [nrNom, setNrNom]   = useState('');
@@ -531,10 +558,19 @@ export default function App() {
   }, [role, authUser, groupements]);
 
   const lockedDept = (role === 'antenne')
-    ? (authUser?.dept || myDepts[0] || null)
+    ? (authUser?.dept || null)
     : (role === 'departement')
       ? (myDepts.length === 1 ? myDepts[0] : null)
       : null;
+
+  // Droit de créer un diplôme d'antenne : Gestion toujours, sinon département autorisé
+  const typeAllowed = (typeId) => {
+    if (authUser?.role === 'gestion') return true;
+    const list = specialTypeDepts[typeId] || [];
+    return lockedDept ? list.includes(lockedDept) : myDepts.some(d => list.includes(d));
+  };
+  const allowedSpecialTypes = SPECIAL_RECIPIENT_TYPES.filter(t => typeAllowed(t.id));
+  useEffect(() => { if (nrType !== 'benevole' && !typeAllowed(nrType)) setNrType('benevole'); }, [specialTypeDepts, lockedDept, myDepts, nrType, authUser]);
 
   const allForRole = useMemo(() => {
     if (role === 'antenne')     return requests.filter(r => myDepts.includes(r.dept));
@@ -615,20 +651,31 @@ export default function App() {
   };
   const validateComm = id => {
     const req = getReq(id);
+    const voter = (authUser?.email || '').toLowerCase();
+    if (!voter) { fire('Compte sans e-mail — validation impossible.', 'err'); return; }
+    const votes = req.commissionVotes || [];
+    if (votes.includes(voter)) { fire('Vous avez déjà validé ce dossier (1/2) — le second membre de la Commission doit valider.', 'err'); return; }
+    const newVotes = [...votes, voter];
+    if (newVotes.length < 2) {
+      upd(id, { commissionVotes:newVotes, historique:[...req.historique,{ date:today(), action:'Validé par un membre de la Commission (1/2)', auteur:voter, comment:'En attente de la validation du second membre.' }] });
+      audit('valider_commission_1sur2', id, { dept:req.dept });
+      setSelected(null); fire('Validation enregistrée (1/2) — un second membre de la Commission doit encore valider.');
+      return;
+    }
     if (!req.medalType.payant) {
       const counters = { ...diplomeCounters };
       const num = generateDiplomaNumber(req.dept, counters);
       counters[req.dept] = (counters[req.dept]||0) + 1;
       setDiplomeCounters(counters);
-      upd(id, { statut:'diplome_emis', diplomeId:num, historique:[...req.historique,
-        { date:today(), action:'Approuvé par Commission FNPC', auteur:ROLES[role].label, comment:'Validation Commission FNPC.' },
+      upd(id, { statut:'diplome_emis', diplomeId:num, commissionVotes:newVotes, historique:[...req.historique,
+        { date:today(), action:'Approuvé par Commission FNPC (2/2)', auteur:ROLES[role].label, comment:'Validation Commission FNPC.' },
         { date:today(), action:'Diplôme imprimé automatiquement', auteur:'Gestion FNPC', comment:`N° ${num}` }
       ]});
       audit('valider_commission', id, { diplomeId: num, dept: req.dept, medal: req.medalType?.shortLabel });
       setSelected(null); fire(`Dossier approuvé — Diplôme ${num} imprimé automatiquement 🎖`);
       if (req.notifications) showEmail('diplome_emis', { ...req, diplomeId:num });
     } else {
-      upd(id, { statut:'valide_federation', historique:[...req.historique,{ date:today(), action:'Approuvé par Commission FNPC', auteur:ROLES[role].label, comment:'En attente de paiement avant impression.' }] });
+      upd(id, { statut:'valide_federation', commissionVotes:newVotes, historique:[...req.historique,{ date:today(), action:'Approuvé par Commission FNPC (2/2)', auteur:ROLES[role].label, comment:'En attente de paiement avant impression.' }] });
       audit('valider_commission', id, { dept: req.dept, medal: req.medalType?.shortLabel, payant: true });
       setSelected(null); fire('Dossier approuvé — paiement requis avant impression du témoignage');
       if (req.notifications) showEmail('validation_commission', req);
@@ -769,6 +816,10 @@ export default function App() {
   };
 
   const getEffectiveVol = () => {
+    if (nrType !== 'benevole') {
+      if (!nrAntenneNom.trim()) return null;
+      return { id:nrType.toUpperCase(), type:nrType, nom:nrAntenneNom.trim(), prenom:'', genre:null, annee:null, antenne:nrAntenneNom.trim(), dept:lockedDept||nrDept, adhesion:null, ans:null, fonctions:'', distinctions:'' };
+    }
     if (nrMode === 'registry') return nrVol;
     if (!nrNom || !nrPrenom || !nrAdhesion) return null;
     const start = new Date(nrAdhesion); const now = new Date();
@@ -830,7 +881,7 @@ export default function App() {
     setNrNotif(req.notifications);
     setNrCommentaire(req.commentaire || '');
     setNrDept(req.dept || '');
-    setNrMode('registry');
+    setNrMode('registry'); setNrType('benevole'); setNrAntenneNom('');
     // Remove the brouillon so it's replaced on submit
     setRequests(p => p.filter(r => r.id !== req.id));
     setSelected(null);
@@ -841,10 +892,12 @@ export default function App() {
   const createRequest = () => {
     const vol = getEffectiveVol();
     if (!vol || !nrMedal || !nrJust.trim()) return;
+    if (vol.type && vol.type !== 'benevole' && !typeAllowed(vol.type)) { fire("Votre département n'est pas autorisé à ce type de récipiendaire.", 'err'); return; }
     if (nrJust.trim().length < 50) { fire('Les motivations doivent comporter au moins 50 caractères.', 'err'); return; }
     const dept = lockedDept || nrDept || vol.dept;
     if (!dept) { fire('Sélectionnez un département pour cette demande (champ « Association APC »).', 'err'); return; }
     if (!editReqId && deptDisabled[dept]) { fire('Ce département est désactivé — impossible de soumettre.', 'err'); return; }
+    if (role === 'antenne' && antenneLevelOff.includes(dept)) { fire("Le niveau antenne est désactivé pour ce département : la demande doit être créée directement par l'APC.", 'err'); return; }
     const medalType = medalTypes.find(m => m.id === nrMedal);
     const isTemoig = medalType.category === 'temoignage';
     const agrafeIds  = isTemoig ? []    : nrAgrafeDepts;
@@ -865,6 +918,7 @@ export default function App() {
     const hasValidationRight = role === 'antenne'; // In prod: check delegate permissions from SSO
     const targetStatut = role === 'departement' ? 'pret_commission' : hasValidationRight ? 'soumis' : 'soumis_antenne';
     const createAction = role === 'departement' ? "Validé APC — en attente d'envoi en masse" : hasValidationRight ? 'Soumis APC directement' : "Soumis à validation Antenne";
+    const doSubmit = () => {
     if (editReqId) {
       const orig = getReq(editReqId);
       upd(editReqId, {
@@ -891,6 +945,8 @@ export default function App() {
       fire(role==='departement'?'Demande transmise directement en Commission FNPC ✓':'Demande soumise à validation Antenne ✓');
       // Mail groupé J+1 — géré côté backend (cron job)
     }
+    };
+    confirm('Avant de soumettre la demande', "Vérifiez que les règles sont respectées (ancienneté, motivations détaillées…). Si ce n'est pas le cas, la demande pourra être refusée par le ou les niveaux supérieurs.", doSubmit, false, { ok:'Continuer', cancel:'Modifier' });
   };
 
   const searchVol = () => {
@@ -958,7 +1014,7 @@ export default function App() {
     const recipient = [a.nom, a.adresse, `${a.cp || ''} ${a.ville || ''}`.trim()].filter(Boolean).join('<br>');
     const dateFr = new Date().toLocaleDateString('fr-FR');
     const rows = (list || []).map(r =>
-      `<tr><td>${r.benevole.prenom} ${r.benevole.nom}</td><td>${r.medalType.label}</td><td>${r.diplomeId || ''}</td></tr>`
+      `<tr><td>${recipientName(r.benevole)}</td><td>${r.medalType.label}</td><td>${r.diplomeId || ''}</td></tr>`
     ).join('') || '<tr><td colspan="3" style="color:#999">Aucun diplôme</td></tr>';
     w.document.write(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Bordereau — ${dept}</title>
 <style>
@@ -1010,7 +1066,7 @@ export default function App() {
       const agrafeNom = (r.agrafeDepts || []).map(id => agrafes.find(a => a.id === id)?.nom).filter(Boolean).join(', ');
       const values = {
         niveau: r.medalType.shortLabel || '',
-        nom: `${r.benevole.prenom} ${r.benevole.nom}`,
+        nom: recipientName(r.benevole),
         date: diplomaDateFr(r),
         numero: r.diplomeId || '—',
         agrafe: agrafeNom || '',
@@ -1111,7 +1167,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
     setNrNotif(req.notifications);
     setNrCommentaire(req.commentaire||'');
     setNrDept(req.dept||'');
-    setNrMode('registry');
+    setNrMode('registry'); setNrType('benevole'); setNrAntenneNom('');
     setEditReqId(req.id);
     setSelected(null);
     setPage('nouvelle');
@@ -1158,6 +1214,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
       case 'demandes':          return DemandesPage();
       case 'nouvelle':          return NouvelleDemandePage();
       case 'validation_rapide': return ValidationRapidePage();
+      case 'validation_table':  return ValidationTablePage();
       case 'delegues':          return DeleguesPage();
       case 'adresse':           return AdressePage();
       case 'diplomes':          return DiplomesPage();
@@ -1433,9 +1490,9 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
           </div>
         </div>
         <div className="card">
-          <ReqHeader />
+          <ReqHeader showAntenne={role==='departement'} />
           {visibleRequests.length===0 ? <div style={{ textAlign:'center', padding:'36px', color:'#94a3b8' }}>📭 Aucune demande</div>
-            : paginatedRequests.map(req=><ReqRow key={req.id} req={req} onSelect={setSelected} showLate={role!=='antenne'}/>)}
+            : paginatedRequests.map(req=><ReqRow key={req.id} req={req} onSelect={setSelected} showLate={role!=='antenne'} showAntenne={role==='departement'}/>)}
         </div>
         {totalPages > 1 && (
           <div style={{ display:'flex', justifyContent:'center', alignItems:'center', gap:8, marginTop:12 }}>
@@ -1595,7 +1652,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
     );
   }
 
-  const effectiveVol = useMemo(() => getEffectiveVol(), [nrMode, nrVol, nrNom, nrPrenom, nrAdhesion, nrGenre, nrAnnee, nrFonctions, nrDistinctions, nrDept]);
+  const effectiveVol = useMemo(() => getEffectiveVol(), [nrMode, nrType, nrAntenneNom, nrVol, nrNom, nrPrenom, nrAdhesion, nrGenre, nrAnnee, nrFonctions, nrDistinctions, nrDept]);
 
   function NouvelleDemandePage() {
     const vol = effectiveVol;
@@ -1634,12 +1691,17 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
         {/* 2 Récipiendaire */}
         <div className="card" style={{ marginBottom:12 }}>
           <div className="st">2. Récipiendaire</div>
-          <div style={{ display:'flex', gap:8, marginBottom:10 }}>
+          {allowedSpecialTypes.length>0 && <div style={{ display:'flex', gap:8, marginBottom:10, flexWrap:'wrap' }}>
+            <button className={`tab ${nrType==='benevole'?'active':''}`} onClick={()=>setNrType('benevole')}>👤 Bénévole</button>
+            {allowedSpecialTypes.map(t=><button key={t.id} className={`tab ${nrType===t.id?'active':''}`} onClick={()=>setNrType(t.id)}>{t.icon} {t.label}</button>)}
+          </div>}
+          {nrType!=='benevole' && <div className="fg"><label className="fl">Nom — {SPECIAL_RECIPIENT_TYPES.find(t=>t.id===nrType)?.label||''} *</label><input className="input" placeholder={SPECIAL_RECIPIENT_TYPES.find(t=>t.id===nrType)?.placeholder||''} value={nrAntenneNom} onChange={e=>setNrAntenneNom(e.target.value)}/></div>}
+          {nrType==='benevole' && <div style={{ display:'flex', gap:8, marginBottom:10 }}>
             <button className={`tab ${nrMode==='registry'?'active':''}`} onClick={()=>setNrMode('registry')}>🔍 E protec</button>
             <button className={`tab ${nrMode==='manual'?'active':''}`} onClick={()=>setNrMode('manual')}>✏️ Saisie manuelle</button>
-          </div>
+          </div>}
 
-          {nrMode==='registry' && <>
+          {nrType==='benevole' && nrMode==='registry' && <>
             <div style={{ display:'flex', gap:8, marginBottom:10 }}>
               <input className="input" style={{ flex:1 }} placeholder="Nom ou identifiant (Martin, Moreau, Thomas…)" value={nrVolSearch} onChange={e=>setNrVolSearch(e.target.value)} onKeyDown={e=>e.key==='Enter'&&searchVol()}/>
               <button className="btn btn-primary" onClick={searchVol}>Rechercher</button>
@@ -1654,7 +1716,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
             </div>}
           </>}
 
-          {nrMode==='manual' && <div>
+          {nrType==='benevole' && nrMode==='manual' && <div>
             <div className="g2">
               <div className="fg"><label className="fl">Nom *</label><input className="input" placeholder="NOM" value={nrNom} onChange={e=>setNrNom(e.target.value)}/></div>
               <div className="fg"><label className="fl">Prénom *</label><input className="input" placeholder="Prénom" value={nrPrenom} onChange={e=>setNrPrenom(e.target.value)}/></div>
@@ -1663,7 +1725,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
               <div className="fg"><label className="fl">Date d'entrée PC *</label><input className="input" type="date" value={nrAdhesion} onChange={e=>setNrAdhesion(e.target.value)}/></div>
               <div className="fg"><label className="fl">Date de naissance</label><input className="input" type="date" value={nrAnnee} onChange={e=>setNrAnnee(e.target.value)}/></div>
             </div>
-            <div className="fg"><label className="fl">Genre</label><select className="select" value={nrGenre} onChange={e=>setNrGenre(e.target.value)}><option value="M">Masculin</option><option value="F">Féminin</option><option value="C">Chien</option></select></div>
+            <div className="fg"><label className="fl">Genre</label><select className="select" value={nrGenre} onChange={e=>setNrGenre(e.target.value)}><option value="M">Masculin</option><option value="F">Féminin</option></select></div>
           </div>}
 
           {vol && <>
@@ -1709,7 +1771,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
                 );
               })}
             </div>
-            {nrMedal && !medalTypes.find(m=>m.id===nrMedal)?.payant && vol.ans < (medalTypes.find(m=>m.id===nrMedal)?.years||0) && (
+            {nrMedal && (vol?.type !== 'antenne') && vol.ans < (medalTypes.find(m=>m.id===nrMedal)?.years||0) && (
               <div style={{ background:'#fffbeb', border:'1px solid #fbbf24', borderRadius:8, padding:'9px 12px', marginTop:10, fontSize:13, color:'#92400e' }}>
                 ⚡ <strong>Délai non atteint :</strong> Cette distinction sera accordée uniquement pour faits exceptionnels. Veillez à détailler précisément les faits dans le champ Motivations.
               </div>
@@ -1753,6 +1815,60 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
     );
   }
 
+  function ValidationTablePage() {
+    const TH = { padding:'9px 10px', fontSize:11, textTransform:'uppercase', letterSpacing:'0.5px', borderBottom:'2px solid #e5e7eb', whiteSpace:'nowrap' };
+    const TD = { padding:'9px 10px', verticalAlign:'middle' };
+    const pending = allForRole.filter(r => role==='antenne'?canValAntenne(r):role==='departement'?canValDept(r):role==='commission'?canValComm(r):false);
+    const doValidate = (r) => {
+      if (role==='antenne') validateAntenne(r.id);
+      else if (role==='departement') validateDept(r.id);
+      else if (role==='commission') confirm('Approuver la demande', `Approuver ${recipientName(r.benevole)} (${r.medalType.shortLabel}) ?${(r.commissionVotes?.length||0)===1?' Ce sera la 2ᵉ et dernière validation.':" Une 2ᵉ validation par l'autre membre sera ensuite nécessaire."}`, ()=>validateComm(r.id), false);
+    };
+    const voter = (authUser?.email||'').toLowerCase();
+    return (
+      <div>
+        <h1 style={H1}>Validation en tableau</h1>
+        <p style={{ color:'#64748b', fontSize:13, marginBottom:16 }}>{pending.length} dossier(s) en attente de votre validation{role==='commission'?' (2 membres requis)':''}.</p>
+        {pending.length===0
+          ? <div className="card" style={{ textAlign:'center', padding:40, color:'#94a3b8' }}>✓ Aucun dossier en attente de validation</div>
+          : <div className="card" style={{ overflowX:'auto', padding:0 }}>
+            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+              <thead><tr style={{ background:'#f8faff', color:'#1B3764', textAlign:'left' }}>
+                <th style={TH}>N°</th><th style={TH}>Récipiendaire</th><th style={TH}>Antenne</th><th style={TH}>Distinction</th><th style={TH}>Dépt</th><th style={TH}>Ancienneté</th>{role==='commission'&&<th style={TH}>Votes</th>}<th style={TH}>Actions</th>
+              </tr></thead>
+              <tbody>
+                {pending.map(r=>{
+                  const special = !!r.benevole.type;
+                  const late = !special && (r.benevole.ans < r.medalType.years);
+                  const alreadyVoted = role==='commission' && (r.commissionVotes||[]).includes(voter);
+                  return (
+                    <tr key={r.id} style={{ borderBottom:'1px solid #f1f5f9' }}>
+                      <td style={TD}><span style={{ fontFamily:'monospace', fontSize:11, color:'#64748b' }}>{r.id}</span></td>
+                      <td style={{ ...TD, fontWeight:700, color:'#1B3764' }}>{recipientName(r.benevole)}</td>
+                      <td style={{ ...TD, color:'#64748b' }}>{r.benevole.antenne||'—'}</td>
+                      <td style={TD}><span style={{ display:'inline-flex', alignItems:'center', gap:5 }}><span style={{ width:8, height:8, borderRadius:'50%', background:r.medalType.color }}/>{r.medalType.shortLabel}{r.agrafe?' 🏅':''}</span></td>
+                      <td style={{ ...TD, color:'#64748b' }}>{r.dept}</td>
+                      <td style={TD}>{special ? '—' : late ? <span style={{ color:'#f59e0b', fontWeight:700 }}>⚡ {r.benevole.ans} ans</span> : <span style={{ color:'#059669', fontWeight:600 }}>{r.benevole.ans} ans</span>}</td>
+                      {role==='commission'&&<td style={{ ...TD, fontWeight:700, color:(r.commissionVotes?.length||0)>0?'#059669':'#94a3b8' }}>{(r.commissionVotes?.length||0)}/2</td>}
+                      <td style={TD}>
+                        <div style={{ display:'flex', gap:6 }}>
+                          {alreadyVoted
+                            ? <span style={{ fontSize:11, color:'#94a3b8', fontWeight:600, alignSelf:'center' }}>✓ voté</span>
+                            : <button className="btn btn-success btn-sm" onClick={()=>doValidate(r)}>✓ Valider</button>}
+                          <button className="btn btn-danger btn-sm" onClick={()=>setRefuseModal(r)}>✗</button>
+                          <button className="btn btn-outline btn-sm" onClick={()=>setSelected(r)}>Détail</button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>}
+      </div>
+    );
+  }
+
   function ValidationRapidePage() {
     const eligible = requests.filter(r=>r.statut==='en_commission'&&r.benevole.ans>=r.medalType.years);
     const horsDelai = requests.filter(r=>r.statut==='en_commission'&&r.benevole.ans<r.medalType.years);
@@ -1767,7 +1883,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
         {eligible.map(req=>(
           <div key={req.id} className="card" style={{ marginBottom:8, display:'flex', alignItems:'center', gap:12, borderLeft:'4px solid #059669', padding:'12px 16px' }}>
             <div style={{ flex:1 }}>
-              <div style={{ fontWeight:700, color:'#1B3764', fontFamily:'Playfair Display,serif' }}>{req.benevole.prenom} {req.benevole.nom}</div>
+              <div style={{ fontWeight:700, color:'#1B3764', fontFamily:'Playfair Display,serif' }}>{recipientName(req.benevole)}</div>
               <div style={{ fontSize:12, color:'#64748b', marginTop:2 }}>{req.medalType.label} · {req.dept} · {req.benevole.ans} ans / {req.medalType.years} requis</div>
             </div>
             <span style={{ background:'#d1fae5', color:'#059669', borderRadius:20, padding:'2px 10px', fontSize:11, fontWeight:700 }}>✓ Éligible</span>
@@ -1780,7 +1896,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
           {horsDelai.map(req=>(
             <div key={req.id} className="card" style={{ marginBottom:8, display:'flex', alignItems:'center', gap:12, borderLeft:'4px solid #f59e0b', padding:'12px 16px' }}>
               <div style={{ flex:1 }}>
-                <div style={{ fontWeight:700, color:'#1B3764', fontFamily:'Playfair Display,serif' }}>{req.benevole.prenom} {req.benevole.nom}</div>
+                <div style={{ fontWeight:700, color:'#1B3764', fontFamily:'Playfair Display,serif' }}>{recipientName(req.benevole)}</div>
                 <div style={{ fontSize:12, color:'#f59e0b', marginTop:2 }}>{req.medalType.label} · {req.benevole.ans} ans / {req.medalType.years} requis · faits exceptionnels</div>
               </div>
               <span style={{ background:'#fffbeb', color:'#92400e', borderRadius:20, padding:'2px 10px', fontSize:11, fontWeight:700 }}>⚡ Hors délai</span>
@@ -2004,7 +2120,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
                 {deptTdr.map(req=>(
                   <div key={req.id} className="card" style={{ marginBottom:5, display:'flex', alignItems:'center', gap:10, padding:'9px 14px', borderLeft:'4px solid #fbbf24' }}>
                     <div style={{ flex:1 }}>
-                      <div style={{ fontWeight:700, color:'#1B3764', fontSize:13 }}>{req.benevole.prenom} {req.benevole.nom}</div>
+                      <div style={{ fontWeight:700, color:'#1B3764', fontSize:13 }}>{recipientName(req.benevole)}</div>
                       <div style={{ fontSize:11, color:'#92400e' }}>Témoignage de Reconnaissance · {req.diplomeId}</div>
                     </div>
                     <span style={{ fontSize:10, background:'#fef9c3', color:'#92400e', borderRadius:10, padding:'1px 8px', fontWeight:700 }}>⏳ {tarif}€ requis</span>
@@ -2039,7 +2155,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
                   <div key={req.id} className="card" style={{ marginBottom:6, display:'flex', alignItems:'center', gap:10, padding:'11px 14px', borderLeft:`4px solid ${unpaid?'#fbbf24':req.medalType.color}`, opacity:unpaid?0.85:1 }}>
                     <input type="checkbox" checked={selectedBatch.includes(req.id)} onChange={()=>!unpaid&&toggleBatch(req.id)} disabled={unpaid} style={{ width:15, height:15, flexShrink:0 }}/>
                     <div style={{ flex:1 }}>
-                      <div style={{ fontFamily:'Playfair Display,serif', fontWeight:700, color:'#1B3764', fontSize:14 }}>{req.benevole.prenom} {req.benevole.nom}</div>
+                      <div style={{ fontFamily:'Playfair Display,serif', fontWeight:700, color:'#1B3764', fontSize:14 }}>{recipientName(req.benevole)}</div>
                       <div style={{ color:'#E87722', fontSize:12, fontWeight:600 }}>{req.medalType.label}{agrafeNoms(req)?` — 🏅 Agrafe : ${agrafeNoms(req)}`:''}</div>
                       {unpaid&&<span style={{ fontSize:10, background:'#fef9c3', color:'#92400e', borderRadius:10, padding:'0 6px', fontWeight:700 }}>🔒 Impression bloquée — paiement requis ({tarif}€)</span>}
                     </div>
@@ -2093,7 +2209,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
         {toPrint.map(req=>(
           <div key={req.id} className="card" style={{ marginBottom:7, display:'flex', alignItems:'center', gap:10, padding:'11px 14px', borderLeft:`4px solid ${req.medalType.color}` }}>
             <div style={{ flex:1 }}>
-              <div style={{ fontFamily:'Playfair Display,serif', fontWeight:700, color:'#1B3764', fontSize:14 }}>{req.benevole.prenom} {req.benevole.nom}</div>
+              <div style={{ fontFamily:'Playfair Display,serif', fontWeight:700, color:'#1B3764', fontSize:14 }}>{recipientName(req.benevole)}</div>
               <div style={{ fontSize:12, color:'#64748b', marginTop:1 }}>{req.medalType.label} · {req.dept}</div>
               <div style={{ fontSize:11, color:'#94a3b8' }}>N° {req.diplomeId} · {req.statut==='expedie'?'Expédié':'Émis'}</div>
             </div>
@@ -2328,6 +2444,58 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
               </button>
             </div>
           ))}
+        </div>
+
+        {/* Types de récipiendaire spéciaux — autorisation par département */}
+        <div className="card">
+          <div className="st">🏢 Types de récipiendaire — autorisation par département</div>
+          <p style={{ fontSize:13, color:'#64748b', marginBottom:12 }}>Autorisez, par type et par département, les diplômes dont le récipiendaire n'est pas un bénévole (antenne, chien…). Ailleurs, seul le mode « Bénévole » est proposé (la Gestion peut toujours tout créer).</p>
+          {SPECIAL_RECIPIENT_TYPES.map(t=>{
+            const list = specialTypeDepts[t.id] || [];
+            return (
+              <div key={t.id} style={{ marginBottom:16, paddingBottom:12, borderBottom:'1px solid #f1f5f9' }}>
+                <div style={{ fontSize:14, fontWeight:700, color:'#1B3764', marginBottom:8 }}>{t.icon} {t.label}</div>
+                <div style={{ display:'flex', gap:8, marginBottom:10 }}>
+                  <select className="select" value={stAdd[t.id]||''} onChange={e=>setStAdd(p=>({...p,[t.id]:e.target.value}))} style={{ flex:1 }}>
+                    <option value="">— Choisir un département —</option>
+                    {DEPTS.filter(d=>!list.includes(d)).map(d=><option key={d} value={d}>{d}</option>)}
+                  </select>
+                  <button className="btn btn-success btn-sm" disabled={!stAdd[t.id]} onClick={()=>{ const d=stAdd[t.id]; if(d && !list.includes(d)){ setSpecialTypeDepts(p=>({...p,[t.id]:[...(p[t.id]||[]),d]})); setStAdd(p=>({...p,[t.id]:''})); fire('Autorisé ✓'); } }}>+ Autoriser</button>
+                </div>
+                {list.length===0 ? <p style={{ fontSize:12, color:'#94a3b8' }}>Aucun département autorisé.</p> :
+                  <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
+                    {list.map(d=>(
+                      <span key={d} style={{ display:'inline-flex', alignItems:'center', gap:6, background:'#f1f5f9', borderRadius:20, padding:'3px 10px', fontSize:12, color:'#1B3764', fontWeight:600 }}>
+                        {d}<button onClick={()=>{ setSpecialTypeDepts(p=>({...p,[t.id]:(p[t.id]||[]).filter(x=>x!==d)})); fire('Retiré ✓'); }} style={{ border:'none', background:'none', color:'#dc2626', cursor:'pointer', fontWeight:700, fontSize:13 }}>✗</button>
+                      </span>
+                    ))}
+                  </div>
+                }
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Niveau antenne désactivé par département */}
+        <div className="card">
+          <div className="st">🚫 Désactiver le niveau antenne par département</div>
+          <p style={{ fontSize:13, color:'#64748b', marginBottom:12 }}>Dans les départements ci-dessous, les <strong>antennes ne peuvent pas soumettre</strong> de demande (les dossiers sont créés directement par l'APC).</p>
+          <div style={{ display:'flex', gap:8, marginBottom:12 }}>
+            <select className="select" value={antLvlAddDept} onChange={e=>setAntLvlAddDept(e.target.value)} style={{ flex:1 }}>
+              <option value="">— Choisir un département —</option>
+              {DEPTS.filter(d=>!antenneLevelOff.includes(d)).map(d=><option key={d} value={d}>{d}</option>)}
+            </select>
+            <button className="btn btn-danger btn-sm" disabled={!antLvlAddDept} onClick={()=>{ if(antLvlAddDept && !antenneLevelOff.includes(antLvlAddDept)){ setAntenneLevelOff(p=>[...p, antLvlAddDept]); setAntLvlAddDept(''); fire('Niveau antenne désactivé ✓'); } }}>Désactiver</button>
+          </div>
+          {antenneLevelOff.length===0
+            ? <p style={{ fontSize:13, color:'#94a3b8' }}>Le niveau antenne est actif dans tous les départements.</p>
+            : antenneLevelOff.map(d=>(
+              <div key={d} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'8px 0', borderBottom:'1px solid #f1f5f9' }}>
+                <span style={{ fontSize:13, color:'#dc2626', fontWeight:600 }}>🚫 {d}</span>
+                <button className="btn btn-success btn-sm" onClick={()=>{ setAntenneLevelOff(p=>p.filter(x=>x!==d)); fire('Niveau antenne réactivé ✓'); }}>↺ Réactiver</button>
+              </div>
+            ))
+          }
         </div>
       </div>
     );
@@ -2639,7 +2807,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
               <div key={req.id} className="card" style={{ marginBottom:8, borderLeft:'4px solid #fbbf24', padding:'12px 16px' }}>
                 <div style={{ display:'flex', alignItems:'center', gap:12 }}>
                   <div style={{ flex:1 }}>
-                    <div style={{ fontFamily:'Playfair Display,serif', fontWeight:700, color:'#1B3764', fontSize:16 }}>{req.benevole.prenom} {req.benevole.nom}</div>
+                    <div style={{ fontFamily:'Playfair Display,serif', fontWeight:700, color:'#1B3764', fontSize:16 }}>{recipientName(req.benevole)}</div>
                     <div style={{ fontSize:13, color:'#E87722', fontWeight:600, marginTop:2 }}>{req.medalType.label}</div>
                     <div style={{ fontSize:12, color:'#64748b', marginTop:2 }}>Approuvé le {req.historique.find(h=>h.action.includes('Commission'))?.date||'—'} · N° {req.diplomeId||'En attente'}</div>
                   </div>
@@ -2897,7 +3065,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
             {tdrDept.map(req=>(
               <div key={req.id} className="card" style={{ marginBottom:8, display:'flex', alignItems:'center', gap:12, borderLeft:'4px solid #fbbf24', padding:'12px 16px' }}>
                 <div style={{ flex:1 }}>
-                  <div style={{ fontFamily:'Playfair Display,serif', fontWeight:700, color:'#1B3764', fontSize:16 }}>{req.benevole.prenom} {req.benevole.nom}</div>
+                  <div style={{ fontFamily:'Playfair Display,serif', fontWeight:700, color:'#1B3764', fontSize:16 }}>{recipientName(req.benevole)}</div>
                   <div style={{ fontSize:13, color:'#64748b', marginTop:3 }}>{req.medalType.label} · N° {req.diplomeId||'—'} · {req.benevole.antenne}</div>
                   <div style={{ fontSize:12, color:'#92400e', marginTop:2, fontWeight:600 }}>💳 {tarif}€ à régler</div>
                 </div>
@@ -2913,7 +3081,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
             {tdrPaid.map(req=>(
               <div key={req.id} className="card" style={{ marginBottom:6, display:'flex', alignItems:'center', gap:12, borderLeft:'4px solid #059669', padding:'10px 16px', opacity:0.8 }}>
                 <div style={{ flex:1 }}>
-                  <div style={{ fontWeight:700, color:'#1B3764', fontSize:15 }}>{req.benevole.prenom} {req.benevole.nom}</div>
+                  <div style={{ fontWeight:700, color:'#1B3764', fontSize:15 }}>{recipientName(req.benevole)}</div>
                   <div style={{ fontSize:12, color:'#64748b' }}>{req.medalType.label} · {req.diplomeId}</div>
                 </div>
                 <span style={{ background:'#d1fae5', color:'#059669', borderRadius:20, padding:'2px 10px', fontSize:13, fontWeight:700 }}>✓ Payé</span>
@@ -3195,6 +3363,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
     { id:'demandes', icon:'📋', label:'Demandes', badge:role==='departement'?stats.toValDept:role==='antenne'?stats.toValAntenne:role==='commission'?stats.toValComm:null },
     ...(role==='departement'&&stats.tdrEnAttentePaiement>0?[{ id:'tdr_paiement', icon:'💳', label:'TDR à payer', badge:stats.tdrEnAttentePaiement }]:[]),
     ...(canCreate?[{ id:'nouvelle', icon:'✚', label:'Nouvelle demande' }]:[]),
+    ...(['antenne','departement','commission'].includes(role)?[{ id:'validation_table', icon:'☑️', label:'Validation (tableau)', badge:(role==='antenne'?stats.toValAntenne:role==='departement'?stats.toValDept:stats.toValComm)||null }]:[]),
     ...(['antenne','departement','gestion'].includes(role)?[{ id:'statistiques', icon:'📈', label:'Statistiques' }]:[]),
     ...(role==='commission'?[{ id:'validation_rapide', icon:'⚡', label:'Validation rapide', badge:requests.filter(r=>r.statut==='en_commission'&&r.benevole.ans>=r.medalType.years).length||null }]:[]),
     ...(role==='gestion'?[
@@ -3235,7 +3404,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
       const agrafeNom = (r.agrafeDepts || []).map(id => agrafes.find(a => a.id === id)?.nom).filter(Boolean).join(', ');
       const values = {
         niveau: r.medalType.shortLabel || '',
-        nom: `${r.benevole.prenom} ${r.benevole.nom}`,
+        nom: recipientName(r.benevole),
         date: diplomaDateFr(r),
         numero: r.diplomeId || '—',
         agrafe: agrafeNom || '',
@@ -3395,7 +3564,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:16 }}>
               <div>
                 <div style={{ fontSize:10, color:'#94a3b8', fontFamily:'monospace', marginBottom:2 }}>{selected.id}</div>
-                <h2 style={{ fontFamily:'Playfair Display,serif', color:'#1B3764', fontSize:20, fontWeight:700 }}>{selected.benevole.prenom} {selected.benevole.nom}</h2>
+                <h2 style={{ fontFamily:'Playfair Display,serif', color:'#1B3764', fontSize:20, fontWeight:700 }}>{recipientName(selected.benevole)}</h2>
                 <div style={{ fontSize:12, color:'#64748b', marginTop:2 }}>{selected.benevole.antenne||selected.dept}</div>
               </div>
               <div style={{ display:'flex', gap:6, alignItems:'center' }}>
@@ -3463,8 +3632,18 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
               {canRefuse(selected)&&<button className="btn btn-danger btn-sm" onClick={()=>{ setRefuseModal(selected); setSelected(null); }}>✗ Refuser</button>}
               {canValAntenne(selected)&&<button className="btn btn-success btn-sm" onClick={()=>validateAntenne(selected.id)}>✓ Valider → APC</button>}
               {canValDept(selected)&&<button className="btn btn-success btn-sm" onClick={()=>validateDept(selected.id)}>✓ Valider APC</button>}
-              {canValComm(selected)&&<button className="btn btn-success btn-sm" onClick={()=>confirm('Approuver la demande', `Approuver la demande de ${selected.benevole.prenom} ${selected.benevole.nom} (${selected.medalType.shortLabel}) ?`, ()=>validateComm(selected.id), false)}>✓ Approuver Commission</button>}
-              {canIssue(selected)&&<button className="btn btn-orange btn-sm" onClick={()=>confirm('Imprimer le diplôme', `Imprimer le diplôme de ${selected.benevole.prenom} ${selected.benevole.nom} ? Un numéro définitif sera attribué.`, ()=>issueDiploma(selected.id), false)}>🖨 Imprimer le diplôme</button>}
+              {canValComm(selected)&&(()=>{
+                const voter=(authUser?.email||'').toLowerCase();
+                const votes=selected.commissionVotes||[];
+                const already=votes.includes(voter);
+                return <>
+                  {votes.length>0 && <span style={{ fontSize:12, color:'#059669', fontWeight:700, marginRight:4 }}>🗳 {votes.length}/2 validation(s) Commission</span>}
+                  {already
+                    ? <span style={{ fontSize:12, color:'#94a3b8', fontWeight:600 }}>Vous avez validé — en attente du 2ᵉ membre</span>
+                    : <button className="btn btn-success btn-sm" onClick={()=>confirm('Approuver la demande', `Approuver la demande de ${recipientName(selected.benevole)} (${selected.medalType.shortLabel}) ?${votes.length===1?' Ce sera la 2ᵉ et dernière validation — le dossier sera approuvé.':" Une 2ᵉ validation par l'autre membre sera ensuite nécessaire."}`, ()=>validateComm(selected.id), false)}>✓ Approuver Commission ({votes.length+1}/2)</button>}
+                </>;
+              })()}
+              {canIssue(selected)&&<button className="btn btn-orange btn-sm" onClick={()=>confirm('Imprimer le diplôme', `Imprimer le diplôme de ${recipientName(selected.benevole)} ? Un numéro définitif sera attribué.`, ()=>issueDiploma(selected.id), false)}>🖨 Imprimer le diplôme</button>}
             </div>
           </div>
         </div>
@@ -3477,8 +3656,8 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
             <h2 style={{ fontFamily:'Playfair Display,serif', color: confirmModal.danger ? '#dc2626' : '#1B3764', marginBottom:8 }}>{confirmModal.title}</h2>
             <p style={{ color:'#64748b', fontSize:14, marginBottom:20, lineHeight:1.5 }}>{confirmModal.message}</p>
             <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
-              <button className="btn btn-outline btn-sm" onClick={()=>setConfirmModal(null)}>Annuler</button>
-              <button className={`btn btn-sm ${confirmModal.danger ? 'btn-danger' : 'btn-primary'}`} onClick={()=>{ confirmModal.onConfirm(); setConfirmModal(null); }}>Confirmer</button>
+              <button className="btn btn-outline btn-sm" onClick={()=>setConfirmModal(null)}>{confirmModal.labels?.cancel || 'Annuler'}</button>
+              <button className={`btn btn-sm ${confirmModal.danger ? 'btn-danger' : 'btn-primary'}`} onClick={()=>{ confirmModal.onConfirm(); setConfirmModal(null); }}>{confirmModal.labels?.ok || 'Confirmer'}</button>
             </div>
           </div>
         </div>
@@ -3489,7 +3668,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
         <div className="modal-overlay" onClick={()=>setRefuseModal(null)}>
           <div className="modal" style={{ maxWidth:480 }} onClick={e=>e.stopPropagation()}>
             <h2 style={{ fontFamily:'Playfair Display,serif', color:'#dc2626', marginBottom:6 }}>Refuser la demande</h2>
-            <p style={{ color:'#64748b', fontSize:13, marginBottom:14 }}>{refuseModal.id} — {refuseModal.benevole.prenom} {refuseModal.benevole.nom}</p>
+            <p style={{ color:'#64748b', fontSize:13, marginBottom:14 }}>{refuseModal.id} — {recipientName(refuseModal.benevole)}</p>
             <div className="fg" style={{ marginBottom:16 }}><label className="fl">Motif de refus *</label><textarea className="textarea" rows={4} placeholder="Ce commentaire sera transmis au demandeur." value={refuseComment} onChange={e=>setRefuseComment(e.target.value)}/></div>
             <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
               <button className="btn btn-outline btn-sm" onClick={()=>setRefuseModal(null)}>Annuler</button>
@@ -3504,7 +3683,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
         <div className="modal-overlay" onClick={()=>setResubmitModal(null)}>
           <div className="modal" style={{ maxWidth:480 }} onClick={e=>e.stopPropagation()}>
             <h2 style={{ fontFamily:'Playfair Display,serif', color:'#E87722', marginBottom:6 }}>Resoumettre le dossier</h2>
-            <p style={{ color:'#64748b', fontSize:13, marginBottom:14 }}>{resubmitModal.id} — {resubmitModal.benevole.prenom} {resubmitModal.benevole.nom}</p>
+            <p style={{ color:'#64748b', fontSize:13, marginBottom:14 }}>{resubmitModal.id} — {recipientName(resubmitModal.benevole)}</p>
             <div style={{ background:'#fef2f2', borderRadius:8, padding:'10px 12px', marginBottom:14, fontSize:12, color:'#dc2626' }}>
               <strong>Motif du refus :</strong> {resubmitModal.historique[resubmitModal.historique.length-1]?.comment}
             </div>
@@ -3562,7 +3741,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
               Cette action est irréversible. Confirmez-vous ?
             </p>
             <div style={{ background:'#f0fdf4', border:'1px solid #86efac', borderRadius:8, padding:'10px 14px', marginBottom:20 }}>
-              {quickValConfirm.slice(0,5).map(id=>{ const r=requests.find(x=>x.id===id); return r?<div key={id} style={{ fontSize:13, color:'#065f46', padding:'3px 0' }}>✓ {r.benevole.prenom} {r.benevole.nom} — {r.medalType.shortLabel}</div>:null; })}
+              {quickValConfirm.slice(0,5).map(id=>{ const r=requests.find(x=>x.id===id); return r?<div key={id} style={{ fontSize:13, color:'#065f46', padding:'3px 0' }}>✓ {recipientName(r.benevole)} — {r.medalType.shortLabel}</div>:null; })}
               {quickValConfirm.length>5&&<div style={{ fontSize:12, color:'#94a3b8', marginTop:4 }}>+ {quickValConfirm.length-5} autre(s)…</div>}
             </div>
             <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
@@ -3638,24 +3817,25 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
 
 // ─── COMPOSANTS PARTAGÉS ───────────────────────────────────────────────────────
 
-function ReqHeader() {
+function ReqHeader({ showAntenne = false }) {
   return (
-    <div style={{ display:'grid', gridTemplateColumns:'128px 1fr 1fr 1fr 156px 72px 36px', gap:10, padding:'6px 14px', color:'#94a3b8', fontSize:10, letterSpacing:'0.7px', textTransform:'uppercase', borderBottom:'1px solid #f1f5f9', marginBottom:2 }}>
-      <span>N° Demande</span><span>Récipiendaire</span><span>Distinction</span><span>Département</span><span>Statut</span><span>Date</span><span/>
+    <div style={{ display:'grid', gridTemplateColumns: showAntenne ? '128px 1fr 1fr 1fr 1fr 156px 72px 36px' : '128px 1fr 1fr 1fr 156px 72px 36px', gap:10, padding:'6px 14px', color:'#94a3b8', fontSize:10, letterSpacing:'0.7px', textTransform:'uppercase', borderBottom:'1px solid #f1f5f9', marginBottom:2 }}>
+      <span>N° Demande</span><span>Récipiendaire</span>{showAntenne && <span>Antenne</span>}<span>Distinction</span><span>Département</span><span>Statut</span><span>Date</span><span/>
     </div>
   );
 }
 
-function ReqRow({ req, onSelect, showLate = true }) {
+function ReqRow({ req, onSelect, showLate = true, showAntenne = false }) {
   const s = STATUSES[req.statut];
   const late = showLate && ['soumis','en_commission'].includes(req.statut) && daysSince(req.dateCreation)>30;
   return (
-    <div className={`req-row ${late?'delayed':''}`} onClick={()=>onSelect(req)}>
+    <div className={`req-row ${late?'delayed':''}`} onClick={()=>onSelect(req)} style={showAntenne ? { gridTemplateColumns:'128px 1fr 1fr 1fr 1fr 156px 72px 36px' } : undefined}>
       <span style={{ fontFamily:'monospace', fontSize:10, color:'#64748b', fontWeight:700 }}>{req.id}</span>
       <div>
-        <div style={{ fontWeight:700, color:'#1B3764', fontFamily:'Playfair Display,serif', fontSize:13 }}>{req.benevole.prenom} {req.benevole.nom}</div>
+        <div style={{ fontWeight:700, color:'#1B3764', fontFamily:'Playfair Display,serif', fontSize:13 }}>{recipientName(req.benevole)}</div>
         <div style={{ fontSize:10, color:'#94a3b8', marginTop:1 }}>{req.benevole.antenne||req.demandeur}</div>
       </div>
+      {showAntenne && <span style={{ fontSize:11, color:'#374151' }}>{req.benevole.antenne||'—'}</span>}
       <div style={{ display:'flex', alignItems:'center', gap:6 }}>
         <div style={{ width:8, height:8, borderRadius:'50%', background:req.medalType.color, flexShrink:0 }}/>
         <span style={{ fontSize:11, color:'#374151' }}>{req.medalType.shortLabel}{req.agrafe?' 🏅':''}</span>

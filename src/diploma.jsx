@@ -3,7 +3,7 @@
 // Extrait de App.jsx. Dépendances : ptToPx, MEDAL_TO_GABARIT (constantes).
 
 import React, { useEffect } from "react";
-import { ptToPx, MEDAL_TO_GABARIT } from './constants.js';
+import { ptToPx, MEDAL_TO_GABARIT, recipientName } from './constants.js';
 
 // Rendu d'un diplôme calibré (lecture seule) — A4 paysage à 96dpi (1122px)
 function renderDiplomaCanvas(templates, gabarit, mode, values) {
@@ -58,7 +58,7 @@ function DiplomaModal({ req, templates, agrafes, tarif, onClose }) {
   const agrafeNom = (req.agrafeDepts || []).map(id => (agrafes||[]).find(a => a.id === id)?.nom).filter(Boolean).join(', ');
   const values = {
     niveau: req.medalType.shortLabel || '',
-    nom: `${req.benevole.prenom} ${req.benevole.nom}`,
+    nom: recipientName(req.benevole),
     date: diplomaDateFr(req),
     numero: req.diplomeId || '—',
     agrafe: agrafeNom || '',
