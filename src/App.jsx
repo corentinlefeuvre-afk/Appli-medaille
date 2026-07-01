@@ -33,7 +33,7 @@ class ErrorBoundary extends React.Component {
 export { ErrorBoundary };
 
 const APP_TITLE   = "Demande Médaille FNPC";
-const APP_VERSION = "1.6.12";
+const APP_VERSION = "1.6.14";
 const USE_SUPABASE = true;
 
 // ── PrestaShop Webservice ────────────────────────────────────────────────────
@@ -260,6 +260,7 @@ export default function App() {
     { id:'gm_or',      label:'Grande Médaille Échelon Or',      shortLabel:'Gr. Or',     years:40, category:'grande_medaille', color:'#D4AF37', light:'#fefbe6', payant:false, custom:false },
   ]);
   const [dashYear, setDashYear] = useState('all'); // antenne/APC dashboard year filter
+  const [statFilter, setStatFilter] = useState('all'); // stats : filtre par antenne (APC) / par département (Gestion)
   const [deptAddresses, setDeptAddresses] = useState({
     '75 - Paris Seine': { nom:'APC Paris Seine', adresse:'42 avenue de la République', cp:'75011', ville:'Paris' },
     '69 - Rhône':       { nom:'APC Rhône', adresse:'22 rue Molière', cp:'69001', ville:'Lyon' },
@@ -309,6 +310,7 @@ export default function App() {
   const [adrVille, setAdrVille] = useState('');
   const [adrEmail, setAdrEmail] = useState('');
   const [adrPsClientId, setAdrPsClientId] = useState('');
+  const [adrInfos, setAdrInfos] = useState('');
   const [adrDept, setAdrDept] = useState(''); // département dont on édite l'adresse
   const [impMode, setImpMode] = useState('template');
   const [impDept, setImpDept] = useState('all');
@@ -395,7 +397,7 @@ export default function App() {
   useEffect(() => {
     if (page !== 'adresse' || !adrDept) return;
     const d = deptAddresses[adrDept] || {};
-    setAdrNom(d.nom||''); setAdrAdresse(d.adresse||''); setAdrCp(d.cp||''); setAdrVille(d.ville||''); setAdrEmail(d.email||''); setAdrPsClientId(d.psClientId||'');
+    setAdrNom(d.nom||''); setAdrAdresse(d.adresse||''); setAdrCp(d.cp||''); setAdrVille(d.ville||''); setAdrEmail(d.email||''); setAdrPsClientId(d.psClientId||''); setAdrInfos(d.infos||'');
   }, [page, adrDept]);
 
   useEffect(() => {
@@ -561,7 +563,7 @@ export default function App() {
   const lockedDept = (role === 'antenne')
     ? (authUser?.dept || (authUser?.role === 'gestion' ? ROLES[role]?.dept : null))
     : (role === 'departement')
-      ? (myDepts.length === 1 ? myDepts[0] : null)
+      ? (authUser?.dept || (myDepts.length === 1 ? myDepts[0] : null))
       : null;
 
   // Droit de créer un diplôme d'antenne : Gestion toujours, sinon département autorisé
@@ -1510,7 +1512,10 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
 
   function StatistiquesPage() {
     const years = [...new Set(allForRole.map(r=>r.dateCreation?.slice(0,4)).filter(Boolean))].sort().reverse();
-    const data = dashYear==='all' ? allForRole : allForRole.filter(r=>r.dateCreation?.startsWith(dashYear));
+    const statField = role==='gestion' ? 'dept' : 'antenne';
+    const statOpts = [...new Set(allForRole.map(r => statField==='dept' ? r.dept : r.benevole?.antenne).filter(Boolean))].sort();
+    const base = dashYear==='all' ? allForRole : allForRole.filter(r=>r.dateCreation?.startsWith(dashYear));
+    const data = base.filter(r => statFilter==='all' || (statField==='dept' ? r.dept===statFilter : r.benevole?.antenne===statFilter));
     // Délai moyen de traitement : création -> dernière action de l'historique
     const delays = data.map(r => {
       const hist = Array.isArray(r.historique) ? r.historique : [];
@@ -1551,6 +1556,11 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
               {years.map(y=><option key={y} value={y}>{y}</option>)}
             </select>
             {dashYear!=='all'&&<button className="btn btn-outline btn-sm" onClick={()=>setDashYear('all')}>✕</button>}
+            {(role==='departement'||role==='gestion') && statOpts.length>0 && <select className="select" value={statFilter} onChange={e=>setStatFilter(e.target.value)} style={{ maxWidth:210 }}>
+              <option value="all">{role==='gestion'?'Tous les départements (APC)':'Toutes les antennes'}</option>
+              {statOpts.map(o=><option key={o} value={o}>{o}</option>)}
+            </select>}
+            {statFilter!=='all'&&<button className="btn btn-outline btn-sm" onClick={()=>setStatFilter('all')}>✕</button>}
           </div>
         </div>
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14, marginBottom:14 }}>
@@ -1835,7 +1845,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
           : <div className="card" style={{ overflowX:'auto', padding:0 }}>
             <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
               <thead><tr style={{ background:'#f8faff', color:'#1B3764', textAlign:'left' }}>
-                <th style={TH}>Récipiendaire</th><th style={TH}>Dépt</th><th style={TH}>Antenne</th><th style={TH}>Distinction</th><th style={TH}>Ancienneté</th><th style={TH}>Compétence</th><th style={TH}>Récompenses obtenues</th>{role==='commission'&&<th style={TH}>Votes</th>}<th style={TH}>Actions</th>
+                <th style={TH}>Récipiendaire</th><th style={TH}>Dépt</th><th style={TH}>Antenne</th><th style={TH}>Distinction</th><th style={TH}>Ancienneté</th><th style={TH}>Compétence</th><th style={TH}>Récompenses obtenues</th><th style={TH}>Motivation</th>{role==='commission'&&<th style={TH}>Votes</th>}<th style={TH}>Actions</th>
               </tr></thead>
               <tbody>
                 {pending.map(r=>{
@@ -1844,7 +1854,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
                   const alreadyVoted = role==='commission' && (r.commissionVotes||[]).includes(voter);
                   return (
                     <React.Fragment key={r.id}>
-                    <tr style={{ borderBottom: r.justification?'none':'1px solid #f1f5f9' }}>
+                    <tr style={{ borderBottom:'1px solid #f1f5f9' }}>
                       <td style={{ ...TD, fontWeight:700, color:'#1B3764' }}>{recipientName(r.benevole)}</td>
                       <td style={{ ...TD, color:'#64748b', fontWeight:600 }}>{(r.dept||'').split(' ')[0]}</td>
                       <td style={{ ...TD, color:'#64748b' }}>{r.benevole.antenne||'—'}</td>
@@ -1852,6 +1862,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
                       <td style={TD}>{special ? '—' : late ? <span style={{ color:'#f59e0b', fontWeight:700 }}>⚡ {r.benevole.ans} ans</span> : <span style={{ color:'#059669', fontWeight:600 }}>{r.benevole.ans} ans</span>}</td>
                       <td style={{ ...TD, color:'#64748b', fontSize:12, maxWidth:200 }}>{r.benevole.fonctions||'—'}</td>
                       <td style={{ ...TD, color:'#64748b', fontSize:12, maxWidth:200 }}>{r.benevole.distinctions||'—'}</td>
+                      <td style={{ ...TD, color:'#374151', fontSize:12, maxWidth:260, whiteSpace:'normal', lineHeight:1.4 }}>{r.justification||'—'}</td>
                       {role==='commission'&&<td style={{ ...TD, fontWeight:700, color:(r.commissionVotes?.length||0)>0?'#059669':'#94a3b8' }}>{(r.commissionVotes?.length||0)}/2</td>}
                       <td style={TD}>
                         <div style={{ display:'flex', gap:6 }}>
@@ -1863,7 +1874,6 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
                         </div>
                       </td>
                     </tr>
-                    {r.justification && <tr style={{ borderBottom:'1px solid #f1f5f9' }}><td colSpan={role==='commission'?9:8} style={{ padding:'0 10px 10px 10px', fontSize:12, color:'#64748b', lineHeight:1.5 }}><strong style={{ color:'#1B3764' }}>Motivation :</strong> {r.justification}</td></tr>}
                     </React.Fragment>
                   );
                 })}
@@ -2020,7 +2030,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
 
   function AdressePage() {
     const dept = adrDept || lockedDept || myDepts[0] || '75 - Paris Seine';
-    const save = () => { setDeptAddresses(p=>({ ...p, [dept]:{ nom:adrNom, adresse:adrAdresse, cp:adrCp, ville:adrVille, email:adrEmail, psClientId:adrPsClientId } })); fire('Adresse enregistrée ✓'); };
+    const save = () => { setDeptAddresses(p=>({ ...p, [dept]:{ nom:adrNom, adresse:adrAdresse, cp:adrCp, ville:adrVille, email:adrEmail, psClientId:adrPsClientId, infos:adrInfos } })); fire('Adresse enregistrée ✓'); };
     return (
       <div style={{ maxWidth:600 }}>
         <h1 style={H1}>Adresse de réception APC</h1>
@@ -2033,12 +2043,13 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
         <div className="card" style={{ marginBottom:14 }}>
           <div className="st">{dept}</div>
           <div className="fg"><label className="fl">Nom de l'association</label><input className="input" placeholder="APC Département XX" value={adrNom} onChange={e=>setAdrNom(e.target.value)}/></div>
-          <div className="fg"><label className="fl">Adresse</label><input className="input" placeholder="N° rue, nom de la rue" value={adrAdresse} onChange={e=>setAdrAdresse(e.target.value)}/></div>
+          <div className="fg"><label className="fl">Adresse de réception APC</label><input className="input" placeholder="N° rue, nom de la rue" value={adrAdresse} onChange={e=>setAdrAdresse(e.target.value)}/></div>
           <div className="g2">
             <div className="fg"><label className="fl">Code postal</label><input className="input" placeholder="75000" value={adrCp} onChange={e=>setAdrCp(e.target.value)}/></div>
             <div className="fg"><label className="fl">Ville</label><input className="input" placeholder="Paris" value={adrVille} onChange={e=>setAdrVille(e.target.value)}/></div>
           </div>
           <div className="fg"><label className="fl">Email APC <span style={{ color:'#94a3b8', fontSize:11 }}>(utilisé pour la recherche PrestaShop si pas d'ID client)</span></label><input className="input" type="email" placeholder="apc.dept@protection-civile.org" value={adrEmail} onChange={e=>setAdrEmail(e.target.value)}/></div>
+          <div className="fg"><label className="fl">Informations complémentaires</label><input className="input" placeholder="Bâtiment, étage, à l'attention de, horaires…" value={adrInfos} onChange={e=>setAdrInfos(e.target.value)}/></div>
           {role==='gestion' && <div className="fg">
             <label className="fl">
               ID client PrestaShop{' '}
@@ -3346,7 +3357,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
       { id:'parametres', icon:'⚙️', label:'Paramètres' },
     ]:[]),
     ...(['antenne','departement','gestion'].includes(role)?[{ id:'delegues', icon:'👥', label:'Les Délégués' }]:[]),
-    ...(['departement','gestion'].includes(role)?[{ id:'adresse', icon:'⚙️', label:'Adresse de réception APC' }]:[]),
+    ...(['departement','gestion'].includes(role)?[{ id:'adresse', icon:'⚙️', label:'Paramètres APC' }]:[]),
     { id:'mon_compte', icon:'👤', label:'Mon compte' },
   ];
 
