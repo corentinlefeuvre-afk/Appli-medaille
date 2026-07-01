@@ -33,7 +33,7 @@ class ErrorBoundary extends React.Component {
 export { ErrorBoundary };
 
 const APP_TITLE   = "Demande Médaille FNPC";
-const APP_VERSION = "1.6.11";
+const APP_VERSION = "1.6.12";
 const USE_SUPABASE = true;
 
 // ── PrestaShop Webservice ────────────────────────────────────────────────────
@@ -1817,7 +1817,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
   }
 
   function ValidationTablePage() {
-    const TH = { padding:'9px 10px', fontSize:11, textTransform:'uppercase', letterSpacing:'0.5px', borderBottom:'2px solid #e5e7eb', whiteSpace:'nowrap' };
+    const TH = { padding:'9px 10px', fontSize:11, textTransform:'uppercase', letterSpacing:'0.5px', borderBottom:'2px solid #e5e7eb', whiteSpace:'nowrap', position:'sticky', top:0, background:'#f8faff', zIndex:1 };
     const TD = { padding:'9px 10px', verticalAlign:'middle' };
     const pending = allForRole.filter(r => role==='antenne'?canValAntenne(r):role==='departement'?canValDept(r):role==='commission'?canValComm(r):false);
     const doValidate = (r) => {
@@ -2025,7 +2025,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
       <div style={{ maxWidth:600 }}>
         <h1 style={H1}>Adresse de réception APC</h1>
         <p style={{ color:'#64748b', fontSize:13, marginBottom:18 }}>L'adresse saisie ici sera utilisée pour l'expédition de tous les diplômes de votre département.</p>
-        {(()=>{ const opts = role==='gestion' ? DEPTS : myDepts; return opts.length>1 ? (
+        {(()=>{ const opts = role==='gestion' ? DEPTS : myDepts; return (role==='gestion' && opts.length>1) ? (
           <div className="fg" style={{ maxWidth:380 }}><label className="fl">Département à configurer</label>
             <select className="select" value={adrDept} onChange={e=>setAdrDept(e.target.value)}>{opts.map(d=><option key={d} value={d}>{d}</option>)}</select>
           </div>
@@ -2053,29 +2053,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
               📬 {adrNom}, {adrAdresse}, {adrCp} {adrVille}
             </div>
           )}
-          <button className="btn btn-orange" onClick={save}>💾 Enregistrer</button>
-        </div>
-        {role==='gestion' && (
-          <div className="card">
-            <h2 style={H2}>Toutes les adresses APC</h2>
-            {Object.entries(deptAddresses).length === 0 && <div style={{ color:'#94a3b8', fontSize:13 }}>Aucune adresse configurée.</div>}
-            {Object.entries(deptAddresses).sort(([a],[b])=>{ const na=parseInt(a); const nb=parseInt(b); return na-nb; }).map(([d,a])=>(
-              <div key={d} style={{ padding:'10px 0', borderBottom:'1px solid #f1f5f9', display:'flex', gap:10, alignItems:'center' }}>
-                <div style={{ flex:1 }}>
-                  <div style={{ fontWeight:700, color:'#1B3764', fontSize:14 }}>{d}</div>
-                  <div style={{ fontSize:12, color:'#64748b', marginTop:2 }}>{a.nom}, {a.adresse}, {a.cp} {a.ville}{a.email?` · ${a.email}`:''}{a.psClientId?<span style={{ color:'#059669', fontWeight:600 }}> · PS#{a.psClientId}</span>:<span style={{ color:'#f59e0b' }}> · ⚠️ Pas d'ID PS</span>}</div>
-                </div>
-                <button className="btn btn-outline btn-sm" onClick={()=>{ setAdrNom(a.nom); setAdrAdresse(a.adresse); setAdrCp(a.cp); setAdrVille(a.ville); setAdrEmail(a.email||''); setAdrPsClientId(a.psClientId||''); }}>✏️ Modifier</button>
-                <button className="btn btn-danger btn-sm" onClick={()=>{ setDeptAddresses(p=>{ const n={...p}; delete n[d]; return n; }); fire('Adresse supprimée ✓'); }}>✕</button>
-              </div>
-            ))}
-            <div style={{ marginTop:14, borderTop:'1px solid #f1f5f9', paddingTop:12 }}>
-              <p style={{ fontSize:13, color:'#64748b' }}>Pour modifier une adresse, cliquez sur ✏️ puis complétez le formulaire ci-dessus et enregistrez.</p>
-            </div>
-          </div>
-        )}
-
-        {role==='gestion' && <div className="card" style={{ marginTop:6 }}>
+{role==='gestion' && <div style={{ marginTop:14, paddingTop:14, borderTop:'1px solid #e5e7eb' }}>
           <div className="st">Réglages du département — {dept}</div>
           <p style={{ fontSize:13, color:'#64748b', marginBottom:8 }}>Interrupteurs spécifiques à ce département (changez de département via le sélecteur en haut).</p>
           {(() => {
@@ -2104,6 +2082,10 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
             </>;
           })()}
         </div>}
+          <button className="btn btn-orange" onClick={save}>💾 Enregistrer</button>
+        </div>
+
+
       </div>
     );
   }
@@ -3121,7 +3103,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
             {l:'Valider les demandes (son niveau)', ok:['antenne','departement','commission','gestion'].includes(role)},
             {l:'Gérer les délégués', ok:['antenne','departement','gestion'].includes(role)},
             {l:'Statistiques de son niveau', ok:['antenne','departement','gestion'].includes(role)},
-            {l:'Administration Gestion FNPC', ok:role==='gestion'},
+            ...(role==='gestion'?[{l:'Administration Gestion FNPC', ok:true}]:[]),
           ].map(({l,ok})=>(
             <div key={l} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'8px 0', borderBottom:'1px solid #f1f5f9', fontSize:15 }}>
               <span style={{ color:'#374151' }}>{l}</span>
@@ -3364,7 +3346,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
       { id:'parametres', icon:'⚙️', label:'Paramètres' },
     ]:[]),
     ...(['antenne','departement','gestion'].includes(role)?[{ id:'delegues', icon:'👥', label:'Les Délégués' }]:[]),
-    ...(['departement','gestion'].includes(role)?[{ id:'adresse', icon:'⚙️', label:'Paramètres APC' }]:[]),
+    ...(['departement','gestion'].includes(role)?[{ id:'adresse', icon:'⚙️', label:'Adresse de réception APC' }]:[]),
     { id:'mon_compte', icon:'👤', label:'Mon compte' },
   ];
 
@@ -3455,7 +3437,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
       <style>{CSS}</style>
 
       {/* HEADER */}
-      <header style={{ background:'#1B3764', padding:'0 22px', display:'flex', alignItems:'center', justifyContent:'space-between', height:64, flexShrink:0, borderBottom:'3px solid #E87722' }}>
+      <header style={{ background:'#1B3764', padding:'0 22px', display:'flex', alignItems:'center', justifyContent:'space-between', height:64, flexShrink:0, borderBottom:'3px solid #E87722', position:'sticky', top:0, zIndex:50 }}>
         <div style={{ display:'flex', alignItems:'center', gap:14, cursor:'pointer' }} onClick={()=>setPage('dashboard')}>
           <Logo size={44}/>
           <div>
