@@ -33,7 +33,7 @@ class ErrorBoundary extends React.Component {
 export { ErrorBoundary };
 
 const APP_TITLE   = "Demande Médaille FNPC";
-const APP_VERSION = "1.6.10";
+const APP_VERSION = "1.6.11";
 const USE_SUPABASE = true;
 
 // ── PrestaShop Webservice ────────────────────────────────────────────────────
@@ -1859,7 +1859,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
                             ? <span style={{ fontSize:11, color:'#94a3b8', fontWeight:600, alignSelf:'center' }}>✓ voté</span>
                             : <button className="btn btn-success btn-sm" onClick={()=>doValidate(r)} title="Valider">✓</button>}
                           <button className="btn btn-danger btn-sm" onClick={()=>setRefuseModal(r)}>✗</button>
-                          <button className="btn btn-outline btn-sm" onClick={()=>setSelected(r)}>détails</button>
+                          <button className="btn btn-outline btn-sm" onClick={()=>setSelected(r)}>Détails</button>
                         </div>
                       </td>
                     </tr>
@@ -2075,74 +2075,35 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
           </div>
         )}
 
-        {role==='gestion' && <>
-
-        {/* Départements actifs/inactifs */}
-        <div className="card">
-          <div className="st">Activation des départements</div>
-          <p style={{ fontSize:13, color:'#64748b', marginBottom:12 }}>Désactivez un département pour bloquer toute nouvelle demande de ce niveau.</p>
-          {[...new Set(requests.map(r=>r.dept))].sort().map(d=>(
-            <div key={d} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'8px 0', borderBottom:'1px solid #f1f5f9' }}>
-              <span style={{ fontSize:13, color:'#1B3764', fontWeight:600 }}>{d}</span>
-              <button className={`btn btn-sm ${deptDisabled[d]?'btn-danger':'btn-success'}`} onClick={()=>{ setDeptDisabled(p=>({...p,[d]:!p[d]})); fire(`Département ${deptDisabled[d]?'réactivé':'désactivé'} ✓`); }}>
-                {deptDisabled[d]?'✗ Désactivé':'✓ Actif'}
-              </button>
-            </div>
-          ))}
-        </div>
-
-        {/* Types de récipiendaire spéciaux — autorisation par département */}
-        <div className="card">
-          <div className="st">🏢 Types de récipiendaire — autorisation par département</div>
-          <p style={{ fontSize:13, color:'#64748b', marginBottom:12 }}>Autorisez, par type et par département, les diplômes dont le récipiendaire n'est pas un bénévole (antenne, chien…). Ailleurs, seul le mode « Bénévole » est proposé (la Gestion peut toujours tout créer).</p>
-          {SPECIAL_RECIPIENT_TYPES.map(t=>{
-            const list = specialTypeDepts[t.id] || [];
-            return (
-              <div key={t.id} style={{ marginBottom:16, paddingBottom:12, borderBottom:'1px solid #f1f5f9' }}>
-                <div style={{ fontSize:14, fontWeight:700, color:'#1B3764', marginBottom:8 }}>{t.icon} {t.label}</div>
-                <div style={{ display:'flex', gap:8, marginBottom:10 }}>
-                  <select className="select" value={stAdd[t.id]||''} onChange={e=>setStAdd(p=>({...p,[t.id]:e.target.value}))} style={{ flex:1 }}>
-                    <option value="">— Choisir un département —</option>
-                    {DEPTS.filter(d=>!list.includes(d)).map(d=><option key={d} value={d}>{d}</option>)}
-                  </select>
-                  <button className="btn btn-success btn-sm" disabled={!stAdd[t.id]} onClick={()=>{ const d=stAdd[t.id]; if(d && !list.includes(d)){ setSpecialTypeDepts(p=>({...p,[t.id]:[...(p[t.id]||[]),d]})); setStAdd(p=>({...p,[t.id]:''})); fire('Autorisé ✓'); } }}>+ Autoriser</button>
-                </div>
-                {list.length===0 ? <p style={{ fontSize:12, color:'#94a3b8' }}>Aucun département autorisé.</p> :
-                  <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
-                    {list.map(d=>(
-                      <span key={d} style={{ display:'inline-flex', alignItems:'center', gap:6, background:'#f1f5f9', borderRadius:20, padding:'3px 10px', fontSize:12, color:'#1B3764', fontWeight:600 }}>
-                        {d}<button onClick={()=>{ setSpecialTypeDepts(p=>({...p,[t.id]:(p[t.id]||[]).filter(x=>x!==d)})); fire('Retiré ✓'); }} style={{ border:'none', background:'none', color:'#dc2626', cursor:'pointer', fontWeight:700, fontSize:13 }}>✗</button>
-                      </span>
-                    ))}
-                  </div>
-                }
+        {role==='gestion' && <div className="card" style={{ marginTop:6 }}>
+          <div className="st">Réglages du département — {dept}</div>
+          <p style={{ fontSize:13, color:'#64748b', marginBottom:8 }}>Interrupteurs spécifiques à ce département (changez de département via le sélecteur en haut).</p>
+          {(() => {
+            const ROW = { display:'flex', justifyContent:'space-between', alignItems:'center', gap:12, padding:'11px 0', borderBottom:'1px solid #f1f5f9' };
+            const LBL = { fontSize:13, color:'#1B3764', fontWeight:600 };
+            const HINT = { fontSize:11, color:'#94a3b8', fontWeight:400 };
+            const inList = (list) => list.includes(dept);
+            const toggleList = (setter) => setter(p => p.includes(dept) ? p.filter(x=>x!==dept) : [...p, dept]);
+            const toggleType = (tid) => setSpecialTypeDepts(p => { const l=p[tid]||[]; return { ...p, [tid]: l.includes(dept)? l.filter(x=>x!==dept):[...l,dept] }; });
+            return <>
+              <div style={ROW}>
+                <span style={LBL}>Département actif <span style={HINT}>— si désactivé, bloque toute nouvelle demande</span></span>
+                <button className={`btn btn-sm ${!deptDisabled[dept]?'btn-success':'btn-danger'}`} style={{ minWidth:120 }} onClick={()=>{ setDeptDisabled(p=>({...p,[dept]:!p[dept]})); fire(`Département ${!deptDisabled[dept]?'désactivé':'réactivé'} ✓`); }}>{!deptDisabled[dept]?'✓ Actif':'✗ Désactivé'}</button>
               </div>
-            );
-          })}
-        </div>
-
-        {/* Niveau antenne désactivé par département */}
-        <div className="card">
-          <div className="st">🚫 Désactiver le niveau antenne par département</div>
-          <p style={{ fontSize:13, color:'#64748b', marginBottom:12 }}>Le niveau antenne est actif par défaut. Désactivez-le pour les départements où les <strong>antennes ne soumettent pas</strong> (les dossiers sont alors créés directement par l'APC).</p>
-          <div style={{ display:'flex', gap:8, marginBottom:12 }}>
-            <select className="select" value={antLvlAddDept} onChange={e=>setAntLvlAddDept(e.target.value)} style={{ flex:1 }}>
-              <option value="">— Choisir un département —</option>
-              {DEPTS.filter(d=>!antenneLevelOff.includes(d)).map(d=><option key={d} value={d}>{d}</option>)}
-            </select>
-            <button className="btn btn-danger btn-sm" disabled={!antLvlAddDept} onClick={()=>{ if(antLvlAddDept && !antenneLevelOff.includes(antLvlAddDept)){ setAntenneLevelOff(p=>[...p, antLvlAddDept]); setAntLvlAddDept(''); fire('Niveau antenne désactivé ✓'); } }}>Désactiver</button>
-          </div>
-          {antenneLevelOff.length===0
-            ? <p style={{ fontSize:13, color:'#94a3b8' }}>Le niveau antenne est actif dans tous les départements.</p>
-            : antenneLevelOff.map(d=>(
-              <div key={d} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'8px 0', borderBottom:'1px solid #f1f5f9' }}>
-                <span style={{ fontSize:13, color:'#dc2626', fontWeight:600 }}>🚫 {d}</span>
-                <button className="btn btn-success btn-sm" onClick={()=>{ setAntenneLevelOff(p=>p.filter(x=>x!==d)); fire('Niveau antenne réactivé ✓'); }}>↺ Réactiver</button>
+              <div style={ROW}>
+                <span style={LBL}>Niveau antenne <span style={HINT}>— les antennes peuvent soumettre</span></span>
+                <button className={`btn btn-sm ${!inList(antenneLevelOff)?'btn-success':'btn-danger'}`} style={{ minWidth:120 }} onClick={()=>{ toggleList(setAntenneLevelOff); fire('Niveau antenne mis à jour ✓'); }}>{!inList(antenneLevelOff)?'✓ Actif':'✗ Désactivé'}</button>
               </div>
-            ))
-          }
-        </div>
-        </>}
+              {SPECIAL_RECIPIENT_TYPES.map(t=>{
+                const on=(specialTypeDepts[t.id]||[]).includes(dept);
+                return <div key={t.id} style={ROW}>
+                  <span style={LBL}>{t.icon} Diplômes « {t.label} » <span style={HINT}>— autorisés pour ce département</span></span>
+                  <button className={`btn btn-sm ${on?'btn-success':'btn-outline'}`} style={{ minWidth:120 }} onClick={()=>{ toggleType(t.id); fire(`Type « ${t.label} » ${on?'retiré':'autorisé'} ✓`); }}>{on?'✓ Autorisé':'✗ Non autorisé'}</button>
+                </div>;
+              })}
+            </>;
+          })()}
+        </div>}
       </div>
     );
   }
