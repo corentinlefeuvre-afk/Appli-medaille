@@ -33,17 +33,25 @@ class ErrorBoundary extends React.Component {
 export { ErrorBoundary };
 
 const APP_TITLE   = "Demande Médaille FNPC";
-const APP_VERSION = "1.6.15";
+const APP_VERSION = "1.6.17";
 const USE_SUPABASE = true;
 
 // ── PrestaShop Webservice ────────────────────────────────────────────────────
 // Les appels passent par une Netlify Function (proxy serverside) pour éviter les CORS
 const PS_PROXY = '/.netlify/functions/prestashop-proxy';
 
+// Échappement HTML — à appliquer à TOUTE donnée utilisateur injectée dans du HTML
+// construit par chaîne (document.write, dangerouslySetInnerHTML, e-mails).
+const escHtml = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+
+// Jeton partagé avec les Netlify Functions (anti-abus : relais e-mail, proxy PS).
+// Défini au build via VITE_APP_TOKEN (même valeur que APP_TOKEN côté Netlify Functions).
+const APP_TOKEN = import.meta.env.VITE_APP_TOKEN || '';
+
 const psCall = async (path, method = 'GET', xml = null) => {
   const res = await fetch(PS_PROXY, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-App-Token': APP_TOKEN },
     body: JSON.stringify({ path, method, xml }),
   });
   let result;
@@ -59,6 +67,19 @@ const psCall = async (path, method = 'GET', xml = null) => {
 };
 
 const prestashop = {
+  // Référence de commande : 9 caractères alphanumériques MAXIMUM.
+  // ps_orders.reference et ps_order_payment.order_reference sont des varchar(9) :
+  // au-delà, PrestaShop 9 échoue avec « Can't save Order Payment » (PaymentModule:421).
+  // Format : TDR + n° de département + aléa → ex. TDR75K3F2. La traçabilité complète
+  // (département, date, demandes) reste dans le journal d'audit et sur chaque dossier.
+  makeOrderRef(dept) {
+    const d = String(dept || '').split(' ')[0].replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 3);
+    const base = 'TDR' + d;
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let ref = base;
+    while (ref.length < 9) ref += alphabet[Math.floor(Math.random() * alphabet.length)];
+    return ref.slice(0, 9);
+  },
   async getProductByRef(ref) {
     const d = await psCall('/products?filter[reference]=' + ref);
     return d?.products?.[0] ?? null;
@@ -383,7 +404,7 @@ export default function App() {
     try {
       const res = await fetch('/.netlify/functions/send-email', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-App-Token': APP_TOKEN },
         body: JSON.stringify({ to: emailModal.destinataire, subject: emailModal.sujet, body: (emailModal.corps||'').replace(/<br\s*\/?>/gi,'\n').replace(/<\/(p|div|li)>/gi,'\n').replace(/<[^>]+>/g,''), html: fnpcEmailHtml(emailModal.corps) }),
       });
       const data = await res.json().catch(() => ({}));
@@ -626,7 +647,8 @@ export default function App() {
     const tpl = emailTemplates[type];
     if (!tpl) return;
     const sujet = tpl.sujet.replace(/{prenom}/g,req.benevole.prenom).replace(/{nom}/g,req.benevole.nom).replace(/{distinction}/g,req.medalType.label);
-    const corps = tpl.corps.replace(/{prenom}/g,req.benevole.prenom).replace(/{nom}/g,req.benevole.nom).replace(/{distinction}/g,req.medalType.label).replace(/{date}/g,today()).replace(/{numero}/g,req.diplomeId||'').replace(/{motif}/g,refuseComment).replace(/{tarif}/g,tarif).replace(/{temoignagePaiement}/g,req.medalType.payant?`\nNB : Ce témoignage nécessite un paiement de ${tarif}€.`:'');
+    // Le corps est du HTML (éditeur visuel) → les variables injectées sont échappées pour éviter toute injection HTML/JS via les champs saisis.
+    const corps = tpl.corps.replace(/{prenom}/g,escHtml(req.benevole.prenom)).replace(/{nom}/g,escHtml(req.benevole.nom)).replace(/{distinction}/g,escHtml(req.medalType.label)).replace(/{date}/g,today()).replace(/{numero}/g,escHtml(req.diplomeId||'')).replace(/{motif}/g,escHtml(refuseComment)).replace(/{tarif}/g,escHtml(tarif)).replace(/{temoignagePaiement}/g,req.medalType.payant?`\nNB : Ce témoignage nécessite un paiement de ${escHtml(tarif)}€.`:'');
     setEmailModal({ sujet, corps, destinataire: req.emailDemandeur });
   };
 
@@ -739,7 +761,7 @@ export default function App() {
         const cart = await prestashop.createCart(customer.id, addresses[0].id);
         if (!cart?.id) throw new Error('Erreur lors de la création du panier PrestaShop');
 
-        const ref   = `FNPC-TDR-${req.dept.split(' ')[0]}-${req.id}`;
+        const ref   = prestashop.makeOrderRef(req.dept); // 9 car. max (contrainte PS)
         const order = await prestashop.createOrder(customer.id, cart.id, addresses[0].id, prodId, 1, ref, tarif);
         if (!order?.id) throw new Error('Erreur lors de la création de la commande PrestaShop');
 
@@ -1014,13 +1036,13 @@ export default function App() {
     if (!a.nom && !a.adresse) { fire(`Aucune adresse configurée pour ${dept} (Paramètres APC → Adresse)`, 'err'); return; }
     const w = window.open('', 'bordereau_fnpc', 'width=820,height=920,menubar=no,toolbar=no');
     if (!w) { fire('Fenêtre bloquée — autorisez les pop-ups pour ce site', 'err'); return; }
-    const recipient = [a.nom, a.adresse, `${a.cp || ''} ${a.ville || ''}`.trim()].filter(Boolean).join('<br>')
-      + (a.infos ? `<br><span style="font-size:14px;font-weight:normal;color:#555">${a.infos}</span>` : '');
+    const recipient = [a.nom, a.adresse, `${a.cp || ''} ${a.ville || ''}`.trim()].filter(Boolean).map(escHtml).join('<br>')
+      + (a.infos ? `<br><span style="font-size:14px;font-weight:normal;color:#555">${escHtml(a.infos)}</span>` : '');
     const dateFr = new Date().toLocaleDateString('fr-FR');
     const rows = (list || []).map(r =>
-      `<tr><td>${recipientName(r.benevole)}</td><td>${r.medalType.label}</td><td>${r.diplomeId || ''}</td></tr>`
+      `<tr><td>${escHtml(recipientName(r.benevole))}</td><td>${escHtml(r.medalType.label)}</td><td>${escHtml(r.diplomeId || '')}</td></tr>`
     ).join('') || '<tr><td colspan="3" style="color:#999">Aucun diplôme</td></tr>';
-    w.document.write(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Bordereau — ${dept}</title>
+    w.document.write(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Bordereau — ${escHtml(dept)}</title>
 <style>
   @page { size: A4; margin: 18mm; }
   body { font-family: Arial, Helvetica, sans-serif; margin:0; color:#111; page-break-after: always; }
@@ -1043,7 +1065,7 @@ export default function App() {
   <div class="bar"></div>
   <div class="head">
     <div class="title">Bordereau d'expédition</div>
-    <div style="text-align:right;font-size:12px;color:#555">${dateFr}<br><strong>${dept}</strong></div>
+    <div style="text-align:right;font-size:12px;color:#555">${dateFr}<br><strong>${escHtml(dept)}</strong></div>
   </div>
   <div class="blocks">
     <div class="block"><div class="lbl">Expéditeur</div>
@@ -2872,7 +2894,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
           }
 
           // 5. Create order (qty = nb TDR du département)
-          const ref = `FNPC-TDR-${dept.split(' ')[0]}-${today()}`;
+          const ref = prestashop.makeOrderRef(dept); // 9 car. max (contrainte PS)
           setPsStep(`📋 [${dept}] Création de la commande (${reqs.length} TDR)…`);
           const order = await prestashop.createOrder(customer.id, cart.id, addrId, productId, reqs.length, ref, tarif);
           if (!order?.id) {
