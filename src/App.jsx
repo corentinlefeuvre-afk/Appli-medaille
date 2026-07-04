@@ -33,7 +33,7 @@ class ErrorBoundary extends React.Component {
 export { ErrorBoundary };
 
 const APP_TITLE   = "Demande Médaille FNPC";
-const APP_VERSION = "1.6.17";
+const APP_VERSION = "1.6.18";
 const USE_SUPABASE = true;
 
 // ── PrestaShop Webservice ────────────────────────────────────────────────────
@@ -47,6 +47,12 @@ const escHtml = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', 
 // Jeton partagé avec les Netlify Functions (anti-abus : relais e-mail, proxy PS).
 // Défini au build via VITE_APP_TOKEN (même valeur que APP_TOKEN côté Netlify Functions).
 const APP_TOKEN = import.meta.env.VITE_APP_TOKEN || '';
+
+// Produit support des commandes TDR dans PrestaShop, et état cible posé
+// après création (1 = En attente du paiement par chèque · 10 = En attente
+// de virement bancaire — liste complète : diagnostic /order_states).
+const PS_PRODUCT_REF = 'DiplomeReco';
+const PS_TDR_STATE   = 1;
 
 const psCall = async (path, method = 'GET', xml = null) => {
   const res = await fetch(PS_PROXY, {
@@ -67,21 +73,10 @@ const psCall = async (path, method = 'GET', xml = null) => {
 };
 
 const prestashop = {
-  // Référence de commande : 9 caractères alphanumériques MAXIMUM.
-  // ps_orders.reference et ps_order_payment.order_reference sont des varchar(9) :
-  // au-delà, PrestaShop 9 échoue avec « Can't save Order Payment » (PaymentModule:421).
-  // Format : TDR + n° de département + aléa → ex. TDR75K3F2. La traçabilité complète
-  // (département, date, demandes) reste dans le journal d'audit et sur chaque dossier.
-  makeOrderRef(dept) {
-    const d = String(dept || '').split(' ')[0].replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 3);
-    const base = 'TDR' + d;
-    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    let ref = base;
-    while (ref.length < 9) ref += alphabet[Math.floor(Math.random() * alphabet.length)];
-    return ref.slice(0, 9);
-  },
   async getProductByRef(ref) {
-    const d = await psCall('/products?filter[reference]=' + ref);
+    // display inclut le prix : PS 9 recalcule les totaux depuis le panier,
+    // le total envoyé doit donc correspondre au prix boutique réel.
+    const d = await psCall('/products?filter[reference]=' + ref + '&display=[id,price,reference]');
     return d?.products?.[0] ?? null;
   },
   async getCustomerByEmail(email) {
@@ -96,21 +91,34 @@ const prestashop = {
     const d = await psCall('/addresses?filter[id_customer]=' + customerId);
     return d?.addresses ?? [];
   },
-  async createCart(customerId, addressId) {
+  async createCart(customerId, addressId, productId, qty) {
+    // ⚠️ PS 9 : Order::addWs() → PaymentModule::validateOrder() construit la
+    // commande À PARTIR DU PANIER. Le panier doit donc contenir les produits
+    // (cart_rows) — un panier vide provoque « Can't save Order Payment ».
     const xml = '<?xml version="1.0" encoding="UTF-8"?>'
       + '<prestashop xmlns:xlink="http://www.w3.org/1999/xlink"><cart>'
       + '<id_currency>1</id_currency><id_lang>1</id_lang>'
       + '<id_customer>' + customerId + '</id_customer>'
       + '<id_address_delivery>' + addressId + '</id_address_delivery>'
       + '<id_address_invoice>' + addressId + '</id_address_invoice>'
-      + '<rows></rows></cart></prestashop>';
+      + '<id_carrier>1</id_carrier>'
+      + '<associations><cart_rows><cart_row>'
+      + '<id_product>' + productId + '</id_product>'
+      + '<id_product_attribute>0</id_product_attribute>'
+      + '<id_address_delivery>' + addressId + '</id_address_delivery>'
+      + '<quantity>' + qty + '</quantity>'
+      + '</cart_row></cart_rows></associations>'
+      + '</cart></prestashop>';
     const d = await psCall('/carts', 'POST', xml);
     if (!d?.cart?.id) throw new Error('Réponse panier inattendue de PrestaShop : ' + String(JSON.stringify(d)).slice(0, 220));
     return d.cart;
   },
-  async createOrder(customerId, cartId, addressId, productId, qty, reference, unitPrice = 0) {
-    // PrestaShop exige les totaux à la création d'une commande via webservice
-    // (il ne les recalcule pas depuis le panier comme le tunnel classique).
+  async createOrder(customerId, cartId, addressId, unitPrice, qty) {
+    // Flux PS 9 validé par diagnostic (04/07/2026) : seuls id_cart, total_paid,
+    // payment et module sont réellement utilisés par addWs() — produits, adresses
+    // et transporteur viennent du panier ; current_state et reference sont IGNORÉS
+    // (état forcé à PS_OS_WS_PAYMENT, référence générée par PS). Les autres champs
+    // restent requis par le schéma XML du webservice.
     const total = ((Number(unitPrice) || 0) * (Number(qty) || 0)).toFixed(2);
     const xml = '<?xml version="1.0" encoding="UTF-8"?>'
       + '<prestashop xmlns:xlink="http://www.w3.org/1999/xlink"><order>'
@@ -120,22 +128,46 @@ const prestashop = {
       + '<id_address_invoice>' + addressId + '</id_address_invoice>'
       + '<id_currency>1</id_currency><id_lang>1</id_lang><id_carrier>1</id_carrier>'
       + '<module>ps_checkpayment</module><payment>Cheque</payment>'
-      + '<current_state>1</current_state>'                 // 1 = En attente paiement chèque (pas "payé" : sinon PS tente d'enregistrer un paiement et plante)
       + '<conversion_rate>1.000000</conversion_rate>'
       + '<total_paid>' + total + '</total_paid>'
-      + '<total_paid_real>0.00</total_paid_real>'        // 0 = pas encore payé (paiement après création)
+      + '<total_paid_real>0.00</total_paid_real>'
       + '<total_products>' + total + '</total_products>'
       + '<total_products_wt>' + total + '</total_products_wt>'
-      + '<reference>' + reference + '</reference>'
-      + '<order_rows><order_row>'
-      + '<id_product>' + productId + '</id_product>'
-      + '<product_quantity>' + qty + '</product_quantity>'
-      + '<id_product_attribute>0</id_product_attribute>'
-      + '</order_row></order_rows>'
       + '</order></prestashop>';
     const d = await psCall('/orders', 'POST', xml);
     if (!d?.order?.id) throw new Error('Réponse commande inattendue de PrestaShop : ' + String(JSON.stringify(d)).slice(0, 220));
     return d.order;
+  },
+  async setOrderState(orderId, stateId) {
+    // L'état ne peut être posé qu'APRÈS la création (current_state ignoré par addWs)
+    const xml = '<?xml version="1.0" encoding="UTF-8"?>'
+      + '<prestashop xmlns:xlink="http://www.w3.org/1999/xlink"><order_history>'
+      + '<id_order>' + orderId + '</id_order>'
+      + '<id_order_state>' + stateId + '</id_order_state>'
+      + '</order_history></prestashop>';
+    return psCall('/order_histories', 'POST', xml);
+  },
+  async getOrder(orderId) {
+    // NB : avec display, la réponse est au pluriel ({"orders":[...]})
+    const d = await psCall('/orders/' + orderId + '?display=[id,reference,current_state,total_paid]');
+    return d?.orders?.[0] ?? d?.order ?? null;
+  },
+  // ── Séquence TDR complète : produit → panier rempli → commande → état → relecture ──
+  async placeTdrOrder({ customerId, addressId, qty, product = null }) {
+    const prod = product || await this.getProductByRef(PS_PRODUCT_REF);
+    if (!prod?.id) throw new Error('Produit ' + PS_PRODUCT_REF + ' introuvable dans PrestaShop (vérifiez la référence)');
+    const cart = await this.createCart(customerId, addressId, prod.id, qty);
+    if (!cart?.id) throw new Error('Erreur lors de la création du panier PrestaShop');
+    const order = await this.createOrder(customerId, cart.id, addressId, prod.price, qty);
+    let stateOk = true;
+    try { await this.setOrderState(order.id, PS_TDR_STATE); } catch { stateOk = false; }
+    const full = await this.getOrder(order.id).catch(() => null);
+    return {
+      id: order.id,
+      reference: full?.reference || order.reference || String(order.id),
+      total: full?.total_paid ? Number(full.total_paid).toFixed(2) : null,
+      stateOk,
+    };
   },
 };
 
@@ -447,7 +479,7 @@ export default function App() {
     }
     // Auto-chargement ID produit PrestaShop
     if (page === 'prestashop' && !psProductId) {
-      prestashop.getProductByRef('DiplomeReco').then(prod => {
+      prestashop.getProductByRef(PS_PRODUCT_REF).then(prod => {
         if (prod?.id) setPsProductId(prod.id);
       }).catch(() => {});
     }
@@ -737,12 +769,6 @@ export default function App() {
     if (!req.prestashopOrderId && !psBypass) {
       try {
         fire('Création commande PrestaShop…');
-        let prodId = psProductId;
-        if (!prodId) {
-          const prod = await prestashop.getProductByRef('DiplomeReco');
-          if (prod?.id) { prodId = prod.id; setPsProductId(prod.id); }
-        }
-        if (!prodId) throw new Error('Produit DiplomeReco introuvable dans PrestaShop');
 
         const apcAddr = deptAddresses[req.dept];
         const apcEmail = apcAddr?.email || `apc.${(req.dept||'').split(' ')[0].toLowerCase()}@protection-civile.org`;
@@ -758,17 +784,12 @@ export default function App() {
         const addresses = await prestashop.getCustomerAddresses(customer.id);
         if (!addresses[0]?.id) throw new Error('Adresse APC introuvable dans PrestaShop');
 
-        const cart = await prestashop.createCart(customer.id, addresses[0].id);
-        if (!cart?.id) throw new Error('Erreur lors de la création du panier PrestaShop');
+        const order = await prestashop.placeTdrOrder({ customerId: customer.id, addressId: addresses[0].id, qty: 1 });
 
-        const ref   = prestashop.makeOrderRef(req.dept); // 9 car. max (contrainte PS)
-        const order = await prestashop.createOrder(customer.id, cart.id, addresses[0].id, prodId, 1, ref, tarif);
-        if (!order?.id) throw new Error('Erreur lors de la création de la commande PrestaShop');
-
-        // PS OK — on mémorise l'ID de commande mais on ne valide pas encore
-        upd(id, { prestashopOrderId: order.id });
-        setPsOrders(p=>[{ dept:req.dept, status:'ok', orderId:order.id, qty:1, ref }, ...p]);
-        fire(`✓ Commande PrestaShop #${order.id} créée`);
+        // PS OK — on mémorise ID + référence PS (générée par la boutique) mais on ne valide pas encore
+        upd(id, { prestashopOrderId: order.id, prestashopRef: order.reference });
+        setPsOrders(p=>[{ dept:req.dept, status:'ok', orderId:order.id, qty:1, ref:order.reference }, ...p]);
+        fire(`✓ Commande PrestaShop #${order.id} (réf ${order.reference}) créée${order.total?` · ${order.total} €`:''}${order.stateOk?'':' · ⚠️ état non posé'}`);
 
       } catch(e) {
         // BLOQUANT — on arrête ici, le paiement n'est pas validé
@@ -2845,15 +2866,11 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
       if (!Object.keys(byDept).length) { fire('Aucune commande à créer', 'err'); return; }
       setPsLoading(true); setPsStep('');
       try {
-        // 1. Get product ID once
-        let productId = psProductId;
-        if (!productId) {
-          setPsStep('🔍 Recherche du produit DiplomeReco…');
-          const prod = await prestashop.getProductByRef('DiplomeReco');
-          if (!prod?.id) throw new Error('Produit DiplomeReco introuvable dans PrestaShop');
-          productId = prod.id;
-          setPsProductId(productId);
-        }
+        // 1. Produit chargé une fois (ID + prix boutique — PS recalcule les totaux depuis le panier)
+        setPsStep('🔍 Recherche du produit ' + PS_PRODUCT_REF + '…');
+        const product = await prestashop.getProductByRef(PS_PRODUCT_REF);
+        if (!product?.id) throw new Error('Produit ' + PS_PRODUCT_REF + ' introuvable dans PrestaShop');
+        setPsProductId(product.id);
 
         const results = [];
         for (const [dept, reqs] of Object.entries(byDept)) {
@@ -2885,29 +2902,22 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
             continue;
           }
 
-          // 4. Create cart
-          setPsStep(`🛒 [${dept}] Création du panier…`);
-          const cart = await prestashop.createCart(customer.id, addrId);
-          if (!cart?.id) {
-            results.push({ dept, status:'error', msg:'Erreur création panier' });
-            continue;
-          }
-
-          // 5. Create order (qty = nb TDR du département)
-          const ref = prestashop.makeOrderRef(dept); // 9 car. max (contrainte PS)
-          setPsStep(`📋 [${dept}] Création de la commande (${reqs.length} TDR)…`);
-          const order = await prestashop.createOrder(customer.id, cart.id, addrId, productId, reqs.length, ref, tarif);
-          if (!order?.id) {
-            results.push({ dept, status:'error', msg:'Erreur création commande' });
+          // 4-5. Panier rempli + commande + état (séquence PS 9 validée)
+          setPsStep(`🛒 [${dept}] Panier + commande (${reqs.length} TDR)…`);
+          let order;
+          try {
+            order = await prestashop.placeTdrOrder({ customerId: customer.id, addressId: addrId, qty: reqs.length, product });
+          } catch(e) {
+            results.push({ dept, status:'error', msg:'Erreur création commande : ' + e.message });
             continue;
           }
 
           // 6. Mark requests as ordered
           reqs.forEach(r => {
-            upd(r.id, { prestashopOrderId: order.id, paiement:'commande_creee' });
-            audit('commande_ps_creee', r.id, { orderId: order.id, dept, ref });
+            upd(r.id, { prestashopOrderId: order.id, prestashopRef: order.reference, paiement:'commande_creee' });
+            audit('commande_ps_creee', r.id, { orderId: order.id, dept, ref: order.reference, total: order.total });
           });
-          results.push({ dept, status:'ok', orderId:order.id, qty:reqs.length, ref });
+          results.push({ dept, status:'ok', orderId:order.id, qty:reqs.length, ref:order.reference });
         }
 
         setPsOrders(p => [...results, ...p]);
