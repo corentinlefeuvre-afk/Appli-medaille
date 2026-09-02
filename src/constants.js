@@ -9,10 +9,10 @@ const DEPTS = [
   '11 - Aude','12 - Aveyron','13 - Bouches-du-Rhône','14 - Calvados','15 - Cantal',
   '16 - Charente','17 - Charente-Maritime','18 - Cher','19 - Corrèze','20 - Corse',
   "21 - Côte-d'Or","22 - Côtes-d'Armor",'23 - Creuse','24 - Dordogne','25 - Doubs',
-  '26 - Drôme','27 - Eure','28 - Eure-et-Loir','29 - Finistère','30 - Gard','31 - Haute-Garonne',
+  '26 - Drôme','28 - Eure-et-Loir','29 - Finistère','30 - Gard','31 - Haute-Garonne',
   '32 - Gers','33 - Gironde','34 - Hérault','35 - Ille-et-Vilaine','36 - Indre',
   '37 - Indre-et-Loire','38 - Isère','39 - Jura','40 - Landes','41 - Loir-et-Cher',
-  '42 - Loire','43 - Haute-Loire','44 - Loire-Atlantique','45 - Loiret','46 - Lot','47 - Lot-et-Garonne','48 - Lozère',
+  '42 - Loire','44 - Loire-Atlantique','45 - Loiret','46 - Lot','47 - Lot-et-Garonne','48 - Lozère',
   '49 - Maine-et-Loire','50 - Manche','51 - Marne','52 - Haute-Marne','53 - Mayenne',
   '54 - Meurthe-et-Moselle','55 - Meuse','56 - Morbihan','57 - Moselle','58 - Nièvre',
   '59 - Nord','60 - Oise','61 - Orne','62 - Pas-de-Calais','63 - Puy-de-Dôme',
@@ -22,9 +22,9 @@ const DEPTS = [
   '77 - Seine-et-Marne','78 - Yvelines','79 - Deux-Sèvres','80 - Somme','81 - Tarn',
   '82 - Tarn-et-Garonne','83 - Var','84 - Vaucluse','85 - Vendée','86 - Vienne',
   '87 - Haute-Vienne','88 - Vosges','89 - Yonne','90 - Territoire de Belfort',
-  "91 - Essonne","92 - Hauts-de-Seine","93 - Seine-Saint-Denis","94 - Val-de-Marne","95 - Val-d'Oise",'971 - Guadeloupe','97150 - Saint-Martin',
+  "91 - Essonne","95 - Val-d'Oise",'971 - Guadeloupe','97150 - Saint-Martin',
   '972 - Martinique','973 - Guyane','974 - La Réunion','976 - Mayotte',
-  '986 - Wallis et Futuna','987 - Polynésie Française','998 - Nouvelle-Calédonie','FNPC',
+  '986 - Wallis et Futuna','987 - Polynésie Française','988 - Nouvelle-Calédonie','FNPC',
 ];
 
 const MEDAL_TYPES = [
@@ -69,6 +69,13 @@ const MOCK_VOLUNTEERS = [
   { id:'V009', nom:'Laurent',  prenom:'Emma',   genre:'F', annee:1985, antenne:'Antenne Paris 12e',        dept:'75 - Paris Seine',      adhesion:'2004-05-10', ans:20, fonctions:'Formatrice, Coordinatrice',                distinctions:'Bronze (2009), Argent (2014), Vermeil (2019)' },
   { id:'V010', nom:'Garcia',   prenom:'Carlos', genre:'M', annee:1972, antenne:'Antenne Lyon Nord',        dept:'69 - Rhône',            adhesion:'2009-03-01', ans:15, fonctions:'Chef de section',                          distinctions:'Bronze (2014), Argent (2019)' },
 ];
+
+// Libellés d'affichage des départements regroupés (la VALEUR stockée reste courte).
+const DEPT_LABELS = {
+  '75 - Paris Seine':     '75 - Paris Seine (75 - Paris, 92 - Hauts-de-Seine, 93 - Seine-Saint-Denis, 94 - Val-de-Marne)',
+  '76 - Normandie Seine': '76 - Normandie Seine (76 - Seine-Maritime, 27 - Eure)',
+};
+const deptLabel = (d) => DEPT_LABELS[d] || d;
 
 const today = () => new Date().toISOString().split('T')[0];
 // Types de récipiendaire « spéciaux » (au-delà du bénévole), activables par département.
@@ -183,5 +190,5 @@ const ptToPx = (pt, w=DIPLOMA_PAGE_W) => pt * w / 841.68;
 const FONT_OPTIONS = ['Arial','Helvetica','Times New Roman','Georgia','Garamond','Verdana','Trebuchet MS','Calibri','Courier New','Playfair Display'];
 
 export {
-  DEPTS, MEDAL_TYPES, STATUSES, ROLES, MOCK_VOLUNTEERS, today, daysSince, getDeptCode, generateDiplomaNumber, getNextMedalSuggestion, recipientName, SPECIAL_RECIPIENT_TYPES, DEFAULT_EMAIL_TEMPLATES, DEFAULT_DIPLOMA_TEMPLATES, DIPLOMA_FIELD_LABELS, MEDAL_TO_GABARIT, DIPLOMA_SAMPLE, TOUR_STEPS, DEFAULT_AGRAFE_TEXTE, DEFAULT_LIST_INTRO, DEFAULT_WORD_CFG, DIPLOMA_PAGE_W, ptToPx, FONT_OPTIONS
+  DEPTS, MEDAL_TYPES, STATUSES, ROLES, MOCK_VOLUNTEERS, today, daysSince, getDeptCode, generateDiplomaNumber, getNextMedalSuggestion, recipientName, DEPT_LABELS, deptLabel, SPECIAL_RECIPIENT_TYPES, DEFAULT_EMAIL_TEMPLATES, DEFAULT_DIPLOMA_TEMPLATES, DIPLOMA_FIELD_LABELS, MEDAL_TO_GABARIT, DIPLOMA_SAMPLE, TOUR_STEPS, DEFAULT_AGRAFE_TEXTE, DEFAULT_LIST_INTRO, DEFAULT_WORD_CFG, DIPLOMA_PAGE_W, ptToPx, FONT_OPTIONS
 };

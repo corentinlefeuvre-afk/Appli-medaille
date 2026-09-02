@@ -4,7 +4,7 @@ import { db } from './supabase.js';
 import { auth } from './auth.js';
 import { CSS, LOGO_SRC, FAV_SRC } from './assets.js';
 import {
-  DEPTS, MEDAL_TYPES, STATUSES, ROLES, MOCK_VOLUNTEERS, today, daysSince, getDeptCode, generateDiplomaNumber, getNextMedalSuggestion, recipientName, SPECIAL_RECIPIENT_TYPES, DEFAULT_EMAIL_TEMPLATES, DEFAULT_DIPLOMA_TEMPLATES, DIPLOMA_FIELD_LABELS, MEDAL_TO_GABARIT, DIPLOMA_SAMPLE, TOUR_STEPS, DEFAULT_AGRAFE_TEXTE, DEFAULT_LIST_INTRO, DEFAULT_WORD_CFG, DIPLOMA_PAGE_W, ptToPx, FONT_OPTIONS
+  DEPTS, MEDAL_TYPES, STATUSES, ROLES, MOCK_VOLUNTEERS, today, daysSince, getDeptCode, generateDiplomaNumber, getNextMedalSuggestion, recipientName, deptLabel, SPECIAL_RECIPIENT_TYPES, DEFAULT_EMAIL_TEMPLATES, DEFAULT_DIPLOMA_TEMPLATES, DIPLOMA_FIELD_LABELS, MEDAL_TO_GABARIT, DIPLOMA_SAMPLE, TOUR_STEPS, DEFAULT_AGRAFE_TEXTE, DEFAULT_LIST_INTRO, DEFAULT_WORD_CFG, DIPLOMA_PAGE_W, ptToPx, FONT_OPTIONS
 } from './constants.js';
 import { diplomaDateFr, diplomaPageHtml, DiplomaModal } from './diploma.jsx';
 
@@ -33,31 +33,17 @@ class ErrorBoundary extends React.Component {
 export { ErrorBoundary };
 
 const APP_TITLE   = "Demande Médaille FNPC";
-const APP_VERSION = "1.6.18";
+const APP_VERSION = "1.6.16";
 const USE_SUPABASE = true;
 
 // ── PrestaShop Webservice ────────────────────────────────────────────────────
 // Les appels passent par une Netlify Function (proxy serverside) pour éviter les CORS
 const PS_PROXY = '/.netlify/functions/prestashop-proxy';
 
-// Échappement HTML — à appliquer à TOUTE donnée utilisateur injectée dans du HTML
-// construit par chaîne (document.write, dangerouslySetInnerHTML, e-mails).
-const escHtml = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
-
-// Jeton partagé avec les Netlify Functions (anti-abus : relais e-mail, proxy PS).
-// Défini au build via VITE_APP_TOKEN (même valeur que APP_TOKEN côté Netlify Functions).
-const APP_TOKEN = import.meta.env.VITE_APP_TOKEN || '';
-
-// Produit support des commandes TDR dans PrestaShop, et état cible posé
-// après création (1 = En attente du paiement par chèque · 10 = En attente
-// de virement bancaire — liste complète : diagnostic /order_states).
-const PS_PRODUCT_REF = 'DiplomeReco';
-const PS_TDR_STATE   = 1;
-
 const psCall = async (path, method = 'GET', xml = null) => {
   const res = await fetch(PS_PROXY, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-App-Token': APP_TOKEN },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ path, method, xml }),
   });
   let result;
@@ -74,9 +60,7 @@ const psCall = async (path, method = 'GET', xml = null) => {
 
 const prestashop = {
   async getProductByRef(ref) {
-    // display inclut le prix : PS 9 recalcule les totaux depuis le panier,
-    // le total envoyé doit donc correspondre au prix boutique réel.
-    const d = await psCall('/products?filter[reference]=' + ref + '&display=[id,price,reference]');
+    const d = await psCall('/products?filter[reference]=' + ref);
     return d?.products?.[0] ?? null;
   },
   async getCustomerByEmail(email) {
@@ -91,34 +75,21 @@ const prestashop = {
     const d = await psCall('/addresses?filter[id_customer]=' + customerId);
     return d?.addresses ?? [];
   },
-  async createCart(customerId, addressId, productId, qty) {
-    // ⚠️ PS 9 : Order::addWs() → PaymentModule::validateOrder() construit la
-    // commande À PARTIR DU PANIER. Le panier doit donc contenir les produits
-    // (cart_rows) — un panier vide provoque « Can't save Order Payment ».
+  async createCart(customerId, addressId) {
     const xml = '<?xml version="1.0" encoding="UTF-8"?>'
       + '<prestashop xmlns:xlink="http://www.w3.org/1999/xlink"><cart>'
       + '<id_currency>1</id_currency><id_lang>1</id_lang>'
       + '<id_customer>' + customerId + '</id_customer>'
       + '<id_address_delivery>' + addressId + '</id_address_delivery>'
       + '<id_address_invoice>' + addressId + '</id_address_invoice>'
-      + '<id_carrier>1</id_carrier>'
-      + '<associations><cart_rows><cart_row>'
-      + '<id_product>' + productId + '</id_product>'
-      + '<id_product_attribute>0</id_product_attribute>'
-      + '<id_address_delivery>' + addressId + '</id_address_delivery>'
-      + '<quantity>' + qty + '</quantity>'
-      + '</cart_row></cart_rows></associations>'
-      + '</cart></prestashop>';
+      + '<rows></rows></cart></prestashop>';
     const d = await psCall('/carts', 'POST', xml);
     if (!d?.cart?.id) throw new Error('Réponse panier inattendue de PrestaShop : ' + String(JSON.stringify(d)).slice(0, 220));
     return d.cart;
   },
-  async createOrder(customerId, cartId, addressId, unitPrice, qty) {
-    // Flux PS 9 validé par diagnostic (04/07/2026) : seuls id_cart, total_paid,
-    // payment et module sont réellement utilisés par addWs() — produits, adresses
-    // et transporteur viennent du panier ; current_state et reference sont IGNORÉS
-    // (état forcé à PS_OS_WS_PAYMENT, référence générée par PS). Les autres champs
-    // restent requis par le schéma XML du webservice.
+  async createOrder(customerId, cartId, addressId, productId, qty, reference, unitPrice = 0) {
+    // PrestaShop exige les totaux à la création d'une commande via webservice
+    // (il ne les recalcule pas depuis le panier comme le tunnel classique).
     const total = ((Number(unitPrice) || 0) * (Number(qty) || 0)).toFixed(2);
     const xml = '<?xml version="1.0" encoding="UTF-8"?>'
       + '<prestashop xmlns:xlink="http://www.w3.org/1999/xlink"><order>'
@@ -128,46 +99,22 @@ const prestashop = {
       + '<id_address_invoice>' + addressId + '</id_address_invoice>'
       + '<id_currency>1</id_currency><id_lang>1</id_lang><id_carrier>1</id_carrier>'
       + '<module>ps_checkpayment</module><payment>Cheque</payment>'
+      + '<current_state>1</current_state>'                 // 1 = En attente paiement chèque (pas "payé" : sinon PS tente d'enregistrer un paiement et plante)
       + '<conversion_rate>1.000000</conversion_rate>'
       + '<total_paid>' + total + '</total_paid>'
-      + '<total_paid_real>0.00</total_paid_real>'
+      + '<total_paid_real>0.00</total_paid_real>'        // 0 = pas encore payé (paiement après création)
       + '<total_products>' + total + '</total_products>'
       + '<total_products_wt>' + total + '</total_products_wt>'
+      + '<reference>' + reference + '</reference>'
+      + '<order_rows><order_row>'
+      + '<id_product>' + productId + '</id_product>'
+      + '<product_quantity>' + qty + '</product_quantity>'
+      + '<id_product_attribute>0</id_product_attribute>'
+      + '</order_row></order_rows>'
       + '</order></prestashop>';
     const d = await psCall('/orders', 'POST', xml);
     if (!d?.order?.id) throw new Error('Réponse commande inattendue de PrestaShop : ' + String(JSON.stringify(d)).slice(0, 220));
     return d.order;
-  },
-  async setOrderState(orderId, stateId) {
-    // L'état ne peut être posé qu'APRÈS la création (current_state ignoré par addWs)
-    const xml = '<?xml version="1.0" encoding="UTF-8"?>'
-      + '<prestashop xmlns:xlink="http://www.w3.org/1999/xlink"><order_history>'
-      + '<id_order>' + orderId + '</id_order>'
-      + '<id_order_state>' + stateId + '</id_order_state>'
-      + '</order_history></prestashop>';
-    return psCall('/order_histories', 'POST', xml);
-  },
-  async getOrder(orderId) {
-    // NB : avec display, la réponse est au pluriel ({"orders":[...]})
-    const d = await psCall('/orders/' + orderId + '?display=[id,reference,current_state,total_paid]');
-    return d?.orders?.[0] ?? d?.order ?? null;
-  },
-  // ── Séquence TDR complète : produit → panier rempli → commande → état → relecture ──
-  async placeTdrOrder({ customerId, addressId, qty, product = null }) {
-    const prod = product || await this.getProductByRef(PS_PRODUCT_REF);
-    if (!prod?.id) throw new Error('Produit ' + PS_PRODUCT_REF + ' introuvable dans PrestaShop (vérifiez la référence)');
-    const cart = await this.createCart(customerId, addressId, prod.id, qty);
-    if (!cart?.id) throw new Error('Erreur lors de la création du panier PrestaShop');
-    const order = await this.createOrder(customerId, cart.id, addressId, prod.price, qty);
-    let stateOk = true;
-    try { await this.setOrderState(order.id, PS_TDR_STATE); } catch { stateOk = false; }
-    const full = await this.getOrder(order.id).catch(() => null);
-    return {
-      id: order.id,
-      reference: full?.reference || order.reference || String(order.id),
-      total: full?.total_paid ? Number(full.total_paid).toFixed(2) : null,
-      stateOk,
-    };
   },
 };
 
@@ -436,7 +383,7 @@ export default function App() {
     try {
       const res = await fetch('/.netlify/functions/send-email', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-App-Token': APP_TOKEN },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ to: emailModal.destinataire, subject: emailModal.sujet, body: (emailModal.corps||'').replace(/<br\s*\/?>/gi,'\n').replace(/<\/(p|div|li)>/gi,'\n').replace(/<[^>]+>/g,''), html: fnpcEmailHtml(emailModal.corps) }),
       });
       const data = await res.json().catch(() => ({}));
@@ -479,7 +426,7 @@ export default function App() {
     }
     // Auto-chargement ID produit PrestaShop
     if (page === 'prestashop' && !psProductId) {
-      prestashop.getProductByRef(PS_PRODUCT_REF).then(prod => {
+      prestashop.getProductByRef('DiplomeReco').then(prod => {
         if (prod?.id) setPsProductId(prod.id);
       }).catch(() => {});
     }
@@ -616,7 +563,7 @@ export default function App() {
   const lockedDept = (role === 'antenne')
     ? (authUser?.dept || (authUser?.role === 'gestion' ? ROLES[role]?.dept : null))
     : (role === 'departement')
-      ? (authUser?.dept || (myDepts.length === 1 ? myDepts[0] : (authUser?.role === 'gestion' ? ROLES[role]?.dept : null)))
+      ? (authUser?.dept || (myDepts.length === 1 ? myDepts[0] : null))
       : null;
 
   // Droit de créer un diplôme d'antenne : Gestion toujours, sinon département autorisé
@@ -679,8 +626,7 @@ export default function App() {
     const tpl = emailTemplates[type];
     if (!tpl) return;
     const sujet = tpl.sujet.replace(/{prenom}/g,req.benevole.prenom).replace(/{nom}/g,req.benevole.nom).replace(/{distinction}/g,req.medalType.label);
-    // Le corps est du HTML (éditeur visuel) → les variables injectées sont échappées pour éviter toute injection HTML/JS via les champs saisis.
-    const corps = tpl.corps.replace(/{prenom}/g,escHtml(req.benevole.prenom)).replace(/{nom}/g,escHtml(req.benevole.nom)).replace(/{distinction}/g,escHtml(req.medalType.label)).replace(/{date}/g,today()).replace(/{numero}/g,escHtml(req.diplomeId||'')).replace(/{motif}/g,escHtml(refuseComment)).replace(/{tarif}/g,escHtml(tarif)).replace(/{temoignagePaiement}/g,req.medalType.payant?`\nNB : Ce témoignage nécessite un paiement de ${escHtml(tarif)}€.`:'');
+    const corps = tpl.corps.replace(/{prenom}/g,req.benevole.prenom).replace(/{nom}/g,req.benevole.nom).replace(/{distinction}/g,req.medalType.label).replace(/{date}/g,today()).replace(/{numero}/g,req.diplomeId||'').replace(/{motif}/g,refuseComment).replace(/{tarif}/g,tarif).replace(/{temoignagePaiement}/g,req.medalType.payant?`\nNB : Ce témoignage nécessite un paiement de ${tarif}€.`:'');
     setEmailModal({ sujet, corps, destinataire: req.emailDemandeur });
   };
 
@@ -769,6 +715,12 @@ export default function App() {
     if (!req.prestashopOrderId && !psBypass) {
       try {
         fire('Création commande PrestaShop…');
+        let prodId = psProductId;
+        if (!prodId) {
+          const prod = await prestashop.getProductByRef('DiplomeReco');
+          if (prod?.id) { prodId = prod.id; setPsProductId(prod.id); }
+        }
+        if (!prodId) throw new Error('Produit DiplomeReco introuvable dans PrestaShop');
 
         const apcAddr = deptAddresses[req.dept];
         const apcEmail = apcAddr?.email || `apc.${(req.dept||'').split(' ')[0].toLowerCase()}@protection-civile.org`;
@@ -784,12 +736,17 @@ export default function App() {
         const addresses = await prestashop.getCustomerAddresses(customer.id);
         if (!addresses[0]?.id) throw new Error('Adresse APC introuvable dans PrestaShop');
 
-        const order = await prestashop.placeTdrOrder({ customerId: customer.id, addressId: addresses[0].id, qty: 1 });
+        const cart = await prestashop.createCart(customer.id, addresses[0].id);
+        if (!cart?.id) throw new Error('Erreur lors de la création du panier PrestaShop');
 
-        // PS OK — on mémorise ID + référence PS (générée par la boutique) mais on ne valide pas encore
-        upd(id, { prestashopOrderId: order.id, prestashopRef: order.reference });
-        setPsOrders(p=>[{ dept:req.dept, status:'ok', orderId:order.id, qty:1, ref:order.reference }, ...p]);
-        fire(`✓ Commande PrestaShop #${order.id} (réf ${order.reference}) créée${order.total?` · ${order.total} €`:''}${order.stateOk?'':' · ⚠️ état non posé'}`);
+        const ref   = `FNPC-TDR-${req.dept.split(' ')[0]}-${req.id}`;
+        const order = await prestashop.createOrder(customer.id, cart.id, addresses[0].id, prodId, 1, ref, tarif);
+        if (!order?.id) throw new Error('Erreur lors de la création de la commande PrestaShop');
+
+        // PS OK — on mémorise l'ID de commande mais on ne valide pas encore
+        upd(id, { prestashopOrderId: order.id });
+        setPsOrders(p=>[{ dept:req.dept, status:'ok', orderId:order.id, qty:1, ref }, ...p]);
+        fire(`✓ Commande PrestaShop #${order.id} créée`);
 
       } catch(e) {
         // BLOQUANT — on arrête ici, le paiement n'est pas validé
@@ -863,8 +820,10 @@ export default function App() {
 
   const getEffectiveVol = () => {
     if (nrType !== 'benevole') {
-      if (!nrAntenneNom.trim()) return null;
-      return { id:nrType.toUpperCase(), type:nrType, nom:nrAntenneNom.trim(), prenom:'', genre:null, annee:null, antenne:nrAntenneNom.trim(), dept:lockedDept||nrDept, adhesion:null, ans:null, fonctions:'', distinctions:'' };
+      const autoAntenne = (role === 'antenne' && nrType === 'antenne') ? (authUser?.antenne || '') : null;
+      const nom = (autoAntenne || nrAntenneNom).trim();
+      if (!nom) return null;
+      return { id:nrType.toUpperCase(), type:nrType, nom, prenom:'', genre:null, annee:null, antenne:nom, dept:lockedDept||nrDept, adhesion:null, ans:null, fonctions:'', distinctions:'' };
     }
     if (nrMode === 'registry') return nrVol;
     if (!nrNom || !nrPrenom || !nrAdhesion) return null;
@@ -1057,13 +1016,12 @@ export default function App() {
     if (!a.nom && !a.adresse) { fire(`Aucune adresse configurée pour ${dept} (Paramètres APC → Adresse)`, 'err'); return; }
     const w = window.open('', 'bordereau_fnpc', 'width=820,height=920,menubar=no,toolbar=no');
     if (!w) { fire('Fenêtre bloquée — autorisez les pop-ups pour ce site', 'err'); return; }
-    const recipient = [a.nom, a.adresse, `${a.cp || ''} ${a.ville || ''}`.trim()].filter(Boolean).map(escHtml).join('<br>')
-      + (a.infos ? `<br><span style="font-size:14px;font-weight:normal;color:#555">${escHtml(a.infos)}</span>` : '');
+    const recipient = [a.nom, a.adresse, `${a.cp || ''} ${a.ville || ''}`.trim()].filter(Boolean).join('<br>');
     const dateFr = new Date().toLocaleDateString('fr-FR');
     const rows = (list || []).map(r =>
-      `<tr><td>${escHtml(recipientName(r.benevole))}</td><td>${escHtml(r.medalType.label)}</td><td>${escHtml(r.diplomeId || '')}</td></tr>`
+      `<tr><td>${recipientName(r.benevole)}</td><td>${r.medalType.label}</td><td>${r.diplomeId || ''}</td></tr>`
     ).join('') || '<tr><td colspan="3" style="color:#999">Aucun diplôme</td></tr>';
-    w.document.write(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Bordereau — ${escHtml(dept)}</title>
+    w.document.write(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Bordereau — ${dept}</title>
 <style>
   @page { size: A4; margin: 18mm; }
   body { font-family: Arial, Helvetica, sans-serif; margin:0; color:#111; page-break-after: always; }
@@ -1086,7 +1044,7 @@ export default function App() {
   <div class="bar"></div>
   <div class="head">
     <div class="title">Bordereau d'expédition</div>
-    <div style="text-align:right;font-size:12px;color:#555">${dateFr}<br><strong>${escHtml(dept)}</strong></div>
+    <div style="text-align:right;font-size:12px;color:#555">${dateFr}<br><strong>${dept}</strong></div>
   </div>
   <div class="blocks">
     <div class="block"><div class="lbl">Expéditeur</div>
@@ -1374,7 +1332,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
           <div style={{ display:'flex', gap:8, alignItems:'center' }}>
             <select className="select" value={gDashDept} onChange={e=>setGDashDept(e.target.value)} style={{ maxWidth:200 }}>
               <option value="all">Tous les départements</option>
-              {depts.map(d=><option key={d} value={d}>{d}</option>)}
+              {depts.map(d=><option key={d} value={d}>{deptLabel(d)}</option>)}
             </select>
             <select className="select" value={gDashYear} onChange={e=>setGDashYear(e.target.value)} style={{ maxWidth:110 }}>
               <option value="all">Toutes les années</option>
@@ -1527,7 +1485,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
             </select>
             {['commission','gestion'].includes(role)&&<select className="select" value={filterDept} onChange={e=>setFilterDept(e.target.value)} style={{ maxWidth:190 }}>
               <option value="all">Tous les départements</option>
-              {[...new Set(requests.map(r=>r.dept))].sort().map(d=><option key={d} value={d}>{d}</option>)}
+              {[...new Set(requests.map(r=>r.dept))].sort().map(d=><option key={d} value={d}>{deptLabel(d)}</option>)}
             </select>}
             <select className="select" value={filterYear} onChange={e=>setFilterYear(e.target.value)} style={{ maxWidth:110 }}>
               <option value="all">Toutes années</option>
@@ -1737,9 +1695,8 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
           <div className="st">1. Identification du demandeur</div>
           <div style={{ background:'#f0fdf4', border:'1px solid #86efac', borderRadius:8, padding:'9px 12px', marginBottom:10, fontSize:12, color:'#065f46' }}>🔒 Informations issues de votre compte SSO — non modifiables.</div>
           <div className="fg"><label className="fl">E-mail</label><input className="input" value={nrEmail} readOnly style={{ background:'#f8faff', color:'#64748b' }}/></div>
-          {!lockedDept && ((role==='antenne' && authUser?.role==='antenne') || (role==='departement' && myDepts.length===0)) && <div className="fg"><label className="fl">Association APC *</label><div style={{ background:'#fef2f2', border:'1px solid #fca5a5', borderRadius:8, padding:'10px 12px', fontSize:13, color:'#dc2626' }}>⚠️ Aucun département n'est rattaché à votre compte. Contactez la Gestion FNPC pour le configurer — la soumission est impossible sans cela.</div></div>}
-          {!lockedDept && role==='departement' && myDepts.length>1 && authUser?.role!=='gestion' && <div className="fg"><label className="fl">Association APC * <span style={{ color:'#94a3b8', fontSize:11, fontWeight:400 }}>(groupement — {myDepts.length} départements)</span></label><select className="select" value={nrDept} onChange={e=>setNrDept(e.target.value)}><option value="">— Département —</option>{myDepts.map(d=><option key={d} value={d}>{d}</option>)}</select></div>}
-          {!lockedDept && !(role==='departement') && !(role==='antenne' && authUser?.role==='antenne') && <div className="fg"><label className="fl">Association APC *</label><select className="select" value={nrDept} onChange={e=>setNrDept(e.target.value)}><option value="">— Département —</option>{DEPTS.map(d=><option key={d} value={d}>{d}</option>)}</select></div>}
+          {!lockedDept && role==='antenne' && authUser?.role==='antenne' && <div className="fg"><label className="fl">Association APC *</label><div style={{ background:'#fef2f2', border:'1px solid #fca5a5', borderRadius:8, padding:'10px 12px', fontSize:13, color:'#dc2626' }}>⚠️ Aucun département n'est rattaché à votre compte. Contactez la Gestion FNPC pour le configurer — la soumission est impossible sans cela.</div></div>}
+          {!lockedDept && !(role==='antenne' && authUser?.role==='antenne') && <div className="fg"><label className="fl">Association APC *</label><select className="select" value={nrDept} onChange={e=>setNrDept(e.target.value)}><option value="">— Département —</option>{(role==='departement'?myDepts:DEPTS).map(d=><option key={d} value={d}>{deptLabel(d)}</option>)}</select></div>}
           {lockedDept && <div className="fg"><label className="fl">Association APC</label><input className="input" value={lockedDept} readOnly style={{ background:'#f8faff', color:'#64748b' }}/></div>}
           <div className="fg" style={{ marginBottom:0 }}><label className="fl">Demandeur</label><input className="input" value={nrDemandeur} readOnly style={{ background:'#f8faff', color:'#64748b' }}/></div>
         </div>
@@ -1751,7 +1708,9 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
             <button className={`tab ${nrType==='benevole'?'active':''}`} onClick={()=>setNrType('benevole')}>👤 Bénévole</button>
             {allowedSpecialTypes.map(t=><button key={t.id} className={`tab ${nrType===t.id?'active':''}`} onClick={()=>setNrType(t.id)}>{t.icon} {t.label}</button>)}
           </div>}
-          {nrType!=='benevole' && <div className="fg"><label className="fl">Nom — {SPECIAL_RECIPIENT_TYPES.find(t=>t.id===nrType)?.label||''} *</label><input className="input" placeholder={SPECIAL_RECIPIENT_TYPES.find(t=>t.id===nrType)?.placeholder||''} value={nrAntenneNom} onChange={e=>setNrAntenneNom(e.target.value)}/></div>}
+          {nrType!=='benevole' && ((role==='antenne' && nrType==='antenne')
+            ? <div className="fg"><label className="fl">Récipiendaire (votre antenne)</label><input className="input" value={authUser?.antenne||'—'} readOnly style={{ background:'#f8faff', color:'#64748b' }}/><div style={{ fontSize:12, color:'#94a3b8', marginTop:4 }}>Une antenne ne peut demander une distinction que pour elle-même.</div></div>
+            : <div className="fg"><label className="fl">Nom — {SPECIAL_RECIPIENT_TYPES.find(t=>t.id===nrType)?.label||''} *</label><input className="input" placeholder={SPECIAL_RECIPIENT_TYPES.find(t=>t.id===nrType)?.placeholder||''} value={nrAntenneNom} onChange={e=>setNrAntenneNom(e.target.value)}/></div>)}
           {nrType==='benevole' && <div style={{ display:'flex', gap:8, marginBottom:10 }}>
             <button className={`tab ${nrMode==='registry'?'active':''}`} onClick={()=>setNrMode('registry')}>🔍 E protec</button>
             <button className={`tab ${nrMode==='manual'?'active':''}`} onClick={()=>setNrMode('manual')}>✏️ Saisie manuelle</button>
@@ -1855,7 +1814,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
           <div className="card" style={{ marginBottom:20 }}>
             <div className="st">5. Date de réception souhaitée</div>
             <input className="input" type="date" value={nrDateRecep} onChange={e=>setNrDateRecep(e.target.value)} style={{ maxWidth:220 }}/>
-            {(()=>{ const dept=lockedDept||nrDept||vol.dept; const addr=deptAddresses[dept]; const s=addr?`${addr.nom}, ${addr.adresse}, ${addr.cp} ${addr.ville}${addr.infos?` — ${addr.infos}`:''}`:'Non configurée'; return <p className="fh" style={{ marginTop:6 }}>Le diplôme sera expédié à : <strong>{s}</strong></p>; })()}
+            {(()=>{ const dept=lockedDept||nrDept||vol.dept; const addr=deptAddresses[dept]; const s=addr?`${addr.nom}, ${addr.adresse}, ${addr.cp} ${addr.ville}`:'Non configurée'; return <p className="fh" style={{ marginTop:6 }}>Le diplôme sera expédié à : <strong>{s}</strong></p>; })()}
           </div>
           {role==='departement'&&!editReqId&&<div style={{ background:'#f0fdf4', border:'1px solid #86efac', borderRadius:8, padding:'9px 14px', marginBottom:12, fontSize:13, color:'#065f46' }}>ℹ️ <strong>En tant que Président APC</strong>, votre demande sera transmise <strong>directement en Commission FNPC</strong> sans validation intermédiaire.</div>}
           {editReqId&&<div style={{ background:'#FFF4E8', border:'1px solid #E87722', borderRadius:8, padding:'9px 14px', marginBottom:12, fontSize:13, color:'#C45A00' }}>✏️ Modification de la demande <strong>{editReqId}</strong> — soumettez pour la renvoyer, ou enregistrez en brouillon pour continuer plus tard.</div>}
@@ -1905,17 +1864,17 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
                       <td style={{ ...TD, color:'#64748b' }}>{r.benevole.antenne||'—'}</td>
                       <td style={TD}><span style={{ display:'inline-flex', alignItems:'center', gap:5 }}><span style={{ width:8, height:8, borderRadius:'50%', background:r.medalType.color }}/>{r.medalType.shortLabel}{r.agrafe?' 🏅':''}</span></td>
                       <td style={TD}>{special ? '—' : late ? <span style={{ color:'#f59e0b', fontWeight:700 }}>⚡ {r.benevole.ans} ans</span> : <span style={{ color:'#059669', fontWeight:600 }}>{r.benevole.ans} ans</span>}</td>
-                      <td style={{ ...TD, color:'#64748b', fontSize:12, maxWidth:180, whiteSpace:'normal', wordBreak:'break-word', overflowWrap:'anywhere', lineHeight:1.4 }}>{r.benevole.fonctions||'—'}</td>
-                      <td style={{ ...TD, color:'#64748b', fontSize:12, maxWidth:180, whiteSpace:'normal', wordBreak:'break-word', overflowWrap:'anywhere', lineHeight:1.4 }}>{r.benevole.distinctions||'—'}</td>
-                      <td style={{ ...TD, color:'#374151', fontSize:12, maxWidth:280, whiteSpace:'normal', wordBreak:'break-word', overflowWrap:'anywhere', lineHeight:1.4 }}>{r.justification||'—'}</td>
+                      <td style={{ ...TD, color:'#64748b', fontSize:12, maxWidth:200 }}>{r.benevole.fonctions||'—'}</td>
+                      <td style={{ ...TD, color:'#64748b', fontSize:12, maxWidth:200 }}>{r.benevole.distinctions||'—'}</td>
+                      <td style={{ ...TD, color:'#374151', fontSize:12, maxWidth:260, whiteSpace:'normal', lineHeight:1.4 }}>{r.justification||'—'}</td>
                       {role==='commission'&&<td style={{ ...TD, fontWeight:700, color:(r.commissionVotes?.length||0)>0?'#059669':'#94a3b8' }}>{(r.commissionVotes?.length||0)}/2</td>}
-                      <td style={{ ...TD, whiteSpace:'nowrap', width:96 }}>
-                        <div style={{ display:'flex', gap:4 }}>
+                      <td style={TD}>
+                        <div style={{ display:'flex', gap:6 }}>
                           {alreadyVoted
                             ? <span style={{ fontSize:11, color:'#94a3b8', fontWeight:600, alignSelf:'center' }}>✓ voté</span>
-                            : <button className="btn btn-success" style={{ padding:'4px 8px', fontSize:13, lineHeight:1 }} onClick={()=>doValidate(r)} title="Valider">✓</button>}
-                          <button className="btn btn-danger" style={{ padding:'4px 8px', fontSize:13, lineHeight:1 }} onClick={()=>setRefuseModal(r)} title="Refuser">✗</button>
-                          <button className="btn btn-outline" style={{ padding:'4px 8px', fontSize:13, lineHeight:1 }} onClick={()=>setSelected(r)} title="Voir les détails">👁</button>
+                            : <button className="btn btn-success btn-sm" onClick={()=>doValidate(r)} title="Valider">✓</button>}
+                          <button className="btn btn-danger btn-sm" onClick={()=>setRefuseModal(r)}>✗</button>
+                          <button className="btn btn-outline btn-sm" onClick={()=>setSelected(r)}>Détails</button>
                         </div>
                       </td>
                     </tr>
@@ -2082,19 +2041,19 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
         <p style={{ color:'#64748b', fontSize:13, marginBottom:18 }}>L'adresse saisie ici sera utilisée pour l'expédition de tous les diplômes de votre département.</p>
         {(()=>{ const opts = role==='gestion' ? DEPTS : myDepts; return (role==='gestion' && opts.length>1) ? (
           <div className="fg" style={{ maxWidth:380 }}><label className="fl">Département à configurer</label>
-            <select className="select" value={adrDept} onChange={e=>setAdrDept(e.target.value)}>{opts.map(d=><option key={d} value={d}>{d}</option>)}</select>
+            <select className="select" value={adrDept} onChange={e=>setAdrDept(e.target.value)}>{opts.map(d=><option key={d} value={d}>{deptLabel(d)}</option>)}</select>
           </div>
         ) : null; })()}
         <div className="card" style={{ marginBottom:14 }}>
           <div className="st">{dept}</div>
           <div className="fg"><label className="fl">Nom de l'association</label><input className="input" placeholder="APC Département XX" value={adrNom} onChange={e=>setAdrNom(e.target.value)}/></div>
           <div className="fg"><label className="fl">Adresse de réception APC</label><input className="input" placeholder="N° rue, nom de la rue" value={adrAdresse} onChange={e=>setAdrAdresse(e.target.value)}/></div>
-          <div className="fg"><label className="fl">Informations complémentaires <span style={{ color:'#94a3b8', fontSize:11 }}>(apparaîtront sous l'adresse sur le bordereau d'expédition)</span></label><input className="input" placeholder="Bâtiment, étage, à l'attention de, horaires…" value={adrInfos} onChange={e=>setAdrInfos(e.target.value)}/></div>
           <div className="g2">
             <div className="fg"><label className="fl">Code postal</label><input className="input" placeholder="75000" value={adrCp} onChange={e=>setAdrCp(e.target.value)}/></div>
             <div className="fg"><label className="fl">Ville</label><input className="input" placeholder="Paris" value={adrVille} onChange={e=>setAdrVille(e.target.value)}/></div>
           </div>
           <div className="fg"><label className="fl">Email APC <span style={{ color:'#94a3b8', fontSize:11 }}>(utilisé pour la recherche PrestaShop si pas d'ID client)</span></label><input className="input" type="email" placeholder="apc.dept@protection-civile.org" value={adrEmail} onChange={e=>setAdrEmail(e.target.value)}/></div>
+          <div className="fg"><label className="fl">Informations complémentaires</label><input className="input" placeholder="Bâtiment, étage, à l'attention de, horaires…" value={adrInfos} onChange={e=>setAdrInfos(e.target.value)}/></div>
           {role==='gestion' && <div className="fg">
             <label className="fl">
               ID client PrestaShop{' '}
@@ -2106,7 +2065,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
           </div>}
           {adrNom && adrAdresse && adrCp && adrVille && (
             <div style={{ background:'#f0fdf4', border:'1px solid #86efac', borderRadius:8, padding:'9px 12px', marginBottom:12, fontSize:13, color:'#065f46' }}>
-              📬 {adrNom}, {adrAdresse}, {adrCp} {adrVille}{adrInfos ? <span style={{ color:'#059669' }}> — {adrInfos}</span> : null}
+              📬 {adrNom}, {adrAdresse}, {adrCp} {adrVille}
             </div>
           )}
 {role==='gestion' && <div style={{ marginTop:14, paddingTop:14, borderTop:'1px solid #e5e7eb' }}>
@@ -2272,7 +2231,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
             <button className={`tab ${impMode==='full'?'active':''}`} onClick={()=>setImpMode('full')}>🎖 Diplôme complet</button>
             <select className="select" value={impDept} onChange={e=>setImpDept(e.target.value)} style={{ maxWidth:200 }}>
               <option value="all">Tous les départements</option>
-              {depts.map(d=><option key={d} value={d}>{d}</option>)}
+              {depts.map(d=><option key={d} value={d}>{deptLabel(d)}</option>)}
             </select>
             <button className="btn btn-orange btn-sm" style={{ marginLeft:'auto' }} onClick={()=>openCalibratedBatch(toPrint, impMode==='template'?'preimprime':'complet')}>🖨 Impression groupée calibrée ({toPrint.length})</button>
             {impDept!=='all' && <button className="btn btn-outline btn-sm" onClick={()=>openShippingLabel(impDept, toPrint)}>📄 Bordereau A4 (rupture + adresse)</button>}
@@ -2559,7 +2518,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
           </div>
           <div className="fg"><label className="fl">Départements * <span style={{ color:'#94a3b8', fontWeight:400 }}>(Ctrl/Cmd pour en choisir plusieurs)</span></label>
             <select className="select" multiple style={{ height:160 }} value={grpDepts} onChange={e=>setGrpDepts([...e.target.selectedOptions].map(o=>o.value))}>
-              {DEPTS.map(d=><option key={d} value={d}>{d}</option>)}
+              {DEPTS.map(d=><option key={d} value={d}>{deptLabel(d)}</option>)}
             </select>
             {grpDepts.length>0 && <p className="fh" style={{ color:'#E87722' }}>{grpDepts.length} sélectionné(s)</p>}
           </div>
@@ -2615,7 +2574,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
               </div>
               <label className="fl" style={{ marginBottom:6 }}>Départements concernés <span style={{ color:'#94a3b8', fontWeight:400 }}>(Ctrl/Cmd pour sélection multiple)</span></label>
               <select className="select" multiple style={{ height:110 }} value={agrEditDepts} onChange={e=>setAgrEditDepts([...e.target.selectedOptions].map(o=>o.value))}>
-                {DEPTS.map(d=><option key={d} value={d}>{d}</option>)}
+                {DEPTS.map(d=><option key={d} value={d}>{deptLabel(d)}</option>)}
               </select>
               <p style={{ fontSize:11, color:'#E87722', marginTop:4 }}>{agrEditDepts.length} sélectionné(s)</p>
               <div style={{ display:'flex', gap:8, marginTop:10 }}>
@@ -2641,7 +2600,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
           <div className="fg">
             <label className="fl">Départements concernés * <span style={{ color:'#94a3b8', fontWeight:400 }}>(Ctrl/Cmd pour sélection multiple)</span></label>
             <select className="select" multiple style={{ height:120 }} value={paramAgrDepts} onChange={e=>setParamAgrDepts([...e.target.selectedOptions].map(o=>o.value))}>
-              {DEPTS.map(d=><option key={d} value={d}>{d}</option>)}
+              {DEPTS.map(d=><option key={d} value={d}>{deptLabel(d)}</option>)}
             </select>
             {paramAgrDepts.length > 0 && <p className="fh" style={{ color:'#E87722' }}>{paramAgrDepts.length} sélectionné(s) : {paramAgrDepts.slice(0,3).join(', ')}{paramAgrDepts.length>3?'...':''}</p>}
           </div>
@@ -2866,11 +2825,15 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
       if (!Object.keys(byDept).length) { fire('Aucune commande à créer', 'err'); return; }
       setPsLoading(true); setPsStep('');
       try {
-        // 1. Produit chargé une fois (ID + prix boutique — PS recalcule les totaux depuis le panier)
-        setPsStep('🔍 Recherche du produit ' + PS_PRODUCT_REF + '…');
-        const product = await prestashop.getProductByRef(PS_PRODUCT_REF);
-        if (!product?.id) throw new Error('Produit ' + PS_PRODUCT_REF + ' introuvable dans PrestaShop');
-        setPsProductId(product.id);
+        // 1. Get product ID once
+        let productId = psProductId;
+        if (!productId) {
+          setPsStep('🔍 Recherche du produit DiplomeReco…');
+          const prod = await prestashop.getProductByRef('DiplomeReco');
+          if (!prod?.id) throw new Error('Produit DiplomeReco introuvable dans PrestaShop');
+          productId = prod.id;
+          setPsProductId(productId);
+        }
 
         const results = [];
         for (const [dept, reqs] of Object.entries(byDept)) {
@@ -2902,22 +2865,29 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
             continue;
           }
 
-          // 4-5. Panier rempli + commande + état (séquence PS 9 validée)
-          setPsStep(`🛒 [${dept}] Panier + commande (${reqs.length} TDR)…`);
-          let order;
-          try {
-            order = await prestashop.placeTdrOrder({ customerId: customer.id, addressId: addrId, qty: reqs.length, product });
-          } catch(e) {
-            results.push({ dept, status:'error', msg:'Erreur création commande : ' + e.message });
+          // 4. Create cart
+          setPsStep(`🛒 [${dept}] Création du panier…`);
+          const cart = await prestashop.createCart(customer.id, addrId);
+          if (!cart?.id) {
+            results.push({ dept, status:'error', msg:'Erreur création panier' });
+            continue;
+          }
+
+          // 5. Create order (qty = nb TDR du département)
+          const ref = `FNPC-TDR-${dept.split(' ')[0]}-${today()}`;
+          setPsStep(`📋 [${dept}] Création de la commande (${reqs.length} TDR)…`);
+          const order = await prestashop.createOrder(customer.id, cart.id, addrId, productId, reqs.length, ref, tarif);
+          if (!order?.id) {
+            results.push({ dept, status:'error', msg:'Erreur création commande' });
             continue;
           }
 
           // 6. Mark requests as ordered
           reqs.forEach(r => {
-            upd(r.id, { prestashopOrderId: order.id, prestashopRef: order.reference, paiement:'commande_creee' });
-            audit('commande_ps_creee', r.id, { orderId: order.id, dept, ref: order.reference, total: order.total });
+            upd(r.id, { prestashopOrderId: order.id, paiement:'commande_creee' });
+            audit('commande_ps_creee', r.id, { orderId: order.id, dept, ref });
           });
-          results.push({ dept, status:'ok', orderId:order.id, qty:reqs.length, ref:order.reference });
+          results.push({ dept, status:'ok', orderId:order.id, qty:reqs.length, ref });
         }
 
         setPsOrders(p => [...results, ...p]);
@@ -3815,7 +3785,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
                 <label className="fl">Nom<input className="input" value={gNom} onChange={e=>setGNom(e.target.value)}/></label>
               </div>
               <label className="fl" style={{ marginTop:10, display:'block' }}>Distinction<select className="select" value={gMedal} onChange={e=>setGMedal(e.target.value)}>{medalTypes.map(m=><option key={m.id} value={m.id}>{m.label}</option>)}</select></label>
-              <label className="fl" style={{ marginTop:10, display:'block' }}>Département<select className="select" value={gDept} onChange={e=>setGDept(e.target.value)}>{DEPTS.map(d=><option key={d} value={d}>{d}</option>)}</select></label>
+              <label className="fl" style={{ marginTop:10, display:'block' }}>Département<select className="select" value={gDept} onChange={e=>setGDept(e.target.value)}>{DEPTS.map(d=><option key={d} value={d}>{deptLabel(d)}</option>)}</select></label>
               <label className="fl" style={{ marginTop:10, display:'block' }}>Motivations<textarea className="textarea" rows={5} value={gJust} onChange={e=>setGJust(e.target.value)}/></label>
               <div style={{ display:'flex', gap:8, marginTop:14 }}>
                 <button className="btn btn-orange" onClick={saveGEdit} disabled={!gNom.trim()||!gPrenom.trim()}>💾 Enregistrer la correction</button>
