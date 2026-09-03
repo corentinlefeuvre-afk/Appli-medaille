@@ -179,11 +179,16 @@ $('btnSend').addEventListener('click', async function () {
     const data = await res.json().catch(function(){ return {}; });
     if (!res.ok || !data.ok) throw new Error(data.error || ('Erreur ' + res.status));
 
-    $('msg').innerHTML = '<div class="ok">✓ Demande enregistrée sous le n° <strong>' + data.id + '</strong>. Elle apparaît désormais dans l\'application, transmise à la Commission FNPC pour validation.</div>';
-    document.querySelectorAll('input, textarea').forEach(function(el){ el.value = ''; });
-    $('medal').value = '';
-    majRecap();
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    // Page de confirmation dédiée (remplace le formulaire)
+    document.querySelector('main').innerHTML =
+      '<div class="card" style="text-align:center;padding:48px 26px">' +
+        '<div style="font-size:52px;line-height:1;margin-bottom:14px">✓</div>' +
+        '<div style="font-size:20px;font-weight:bold;color:#1B3764;margin-bottom:10px">Demande enregistrée sous le n° ' + data.id + '</div>' +
+        '<p style="font-size:15px;color:#374151;margin:0 0 26px">En attente de validation par la Commission.</p>' +
+        '<button type="button" class="btn btn-orange" onclick="location.reload()">Saisir une nouvelle demande</button>' +
+      '</div>';
+    window.scrollTo({ top: 0 });
+    return;
   } catch (e) {
     $('msg').innerHTML = '<div class="err">Échec de l\'envoi : ' + e.message + '<br>Vérifiez votre connexion, puis réessayez. Si le problème persiste, contactez la Gestion FNPC.</div>';
   } finally {
