@@ -28,23 +28,44 @@ export const handler = async (event) => {
 
   const URL_SB = (process.env.SUPABASE_URL || '').trim().replace(/\/+$/, '');
   const KEY_SB = (process.env.SUPABASE_SERVICE_KEY || '').trim().replace(/^Bearer\s+/i, '');
-  if (!URL_SB || !KEY_SB) {
-    return { statusCode: 500, headers: CORS, body: JSON.stringify({ error:"Configuration serveur incomplète (SUPABASE_URL / SUPABASE_SERVICE_KEY manquantes dans Netlify)." }) };
+  if (!URL_SB) {
+    return { statusCode: 500, headers: CORS, body: JSON.stringify({ error:"Configuration serveur incomplète : SUPABASE_URL manquante dans les variables Netlify." }) };
   }
 
-  const sb = async (path, opts = {}) => {
-    const res = await fetch(`${URL_SB}/rest/v1/${path}`, {
-      ...opts,
-      headers: { apikey: KEY_SB, Authorization: `Bearer ${KEY_SB}`, 'Content-Type':'application/json', ...(opts.headers||{}) },
-    });
-    if (!res.ok) {
-      const txt = await res.text();
-      if (res.status === 401 || res.status === 403) {
-        const apercu = KEY_SB ? `${KEY_SB.slice(0, 11)}…(${KEY_SB.length} car.)` : 'vide';
-        throw new Error(`Clé Supabase refusée (${res.status}). Clé lue : ${apercu}. Vérifiez que SUPABASE_SERVICE_KEY contient la « Secret key » (sb_secret_… ou service_role), sans espace ni retour à la ligne, et que SUPABASE_URL est correcte (${URL_SB || 'vide'}).`);
-      }
-      throw new Error(`Supabase ${res.status} : ${txt}`);
+  // Certaines clés Supabase (nouveau format sb_secret_…) n'acceptent pas les mêmes
+  // en-têtes que les anciennes : on essaie les variantes, puis on retombe sur la
+  // clé publique (déjà publique dans l'app) pour ne pas bloquer le formulaire.
+  const KEY_FALLBACK = (process.env.SUPABASE_ANON_KEY || 'sb_publishable_wQ6UUNhMZI3D1yk_G-FJEw_F6Er5-6y').trim();
+  const STRATEGIES = [
+    { nom:'apikey+bearer(secret)', h: k => ({ apikey:k, Authorization:`Bearer ${k}` }), key: KEY_SB },
+    { nom:'apikey(secret)',        h: k => ({ apikey:k }),                              key: KEY_SB },
+    { nom:'bearer(secret)',        h: k => ({ Authorization:`Bearer ${k}` }),           key: KEY_SB },
+    { nom:'apikey+bearer(public)', h: k => ({ apikey:k, Authorization:`Bearer ${k}` }), key: KEY_FALLBACK },
+  ].filter(s => s.key);
+
+  let auth = null; // stratégie retenue une fois validée
+
+  const call = async (path, opts = {}, headers) => fetch(`${URL_SB}/rest/v1/${path}`, {
+    ...opts,
+    headers: { 'Content-Type':'application/json', ...headers, ...(opts.headers||{}) },
+  });
+
+  // Détermine la stratégie qui fonctionne (test en lecture)
+  const resoudreAuth = async () => {
+    const essais = [];
+    for (const s of STRATEGIES) {
+      const res = await call('app_requests?select=id&limit=1', {}, s.h(s.key));
+      if (res.ok) { auth = s; return s; }
+      essais.push(`${s.nom} → ${res.status}`);
     }
+    const apercu = KEY_SB ? `${KEY_SB.slice(0,11)}…(${KEY_SB.length} car.)` : 'vide';
+    throw new Error(`Aucune clé acceptée par Supabase. Essais : ${essais.join(' ; ')}. Clé secrète lue : ${apercu}. Vérifiez qu'elle appartient bien au projet ${URL_SB} et qu'elle n'a pas été régénérée.`);
+  };
+
+  const sb = async (path, opts = {}) => {
+    if (!auth) await resoudreAuth();
+    const res = await call(path, opts, auth.h(auth.key));
+    if (!res.ok) throw new Error(`Supabase ${res.status} : ${await res.text()}`);
     return res.status === 204 ? null : res.json();
   };
 
