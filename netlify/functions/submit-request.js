@@ -24,7 +24,6 @@ const clean = (v, max = 300) => String(v ?? '').trim().slice(0, max);
 export const handler = async (event) => {
   const CORS = { 'Access-Control-Allow-Origin':'*', 'Access-Control-Allow-Headers':'Content-Type', 'Access-Control-Allow-Methods':'POST, OPTIONS' };
   if (event.httpMethod === 'OPTIONS') return { statusCode: 204, headers: CORS, body: '' };
-  if (event.httpMethod !== 'POST')   return { statusCode: 405, headers: CORS, body: JSON.stringify({ error:'Méthode non autorisée' }) };
 
   const URL_SB = (process.env.SUPABASE_URL || '').trim().replace(/\/+$/, '');
   const KEY_SB = (process.env.SUPABASE_SERVICE_KEY || '').trim().replace(/^Bearer\s+/i, '');
@@ -49,6 +48,30 @@ export const handler = async (event) => {
     ...opts,
     headers: { 'Content-Type':'application/json', ...headers, ...(opts.headers||{}) },
   });
+
+  // ── Diagnostic : GET ?diag=1 → teste chaque clé / en-tête et renvoie le détail ──
+  if (event.httpMethod === 'GET' && (event.queryStringParameters || {}).diag === '1') {
+    const essais = [];
+    for (const s2 of STRATEGIES) {
+      try {
+        const res = await call('app_requests?select=id&limit=1', {}, s2.h(s2.key));
+        essais.push({ strategie: s2.nom, statut: res.status, ok: res.ok, reponse: (await res.text()).slice(0, 200) });
+      } catch (e) {
+        essais.push({ strategie: s2.nom, erreur: e.message });
+      }
+    }
+    return { statusCode: 200, headers: CORS, body: JSON.stringify({
+      url: URL_SB,
+      cleSecrete: KEY_SB
+        ? { debut: KEY_SB.slice(0, 14), longueur: KEY_SB.length,
+            format: /^sb_secret_/.test(KEY_SB) ? 'nouveau (sb_secret_)' : (/^eyJ/.test(KEY_SB) ? 'ancien (JWT service_role)' : 'inconnu') }
+        : 'absente',
+      clePublique: { debut: KEY_FALLBACK.slice(0, 18), longueur: KEY_FALLBACK.length },
+      essais,
+    }, null, 2) };
+  }
+
+  if (event.httpMethod !== 'POST') return { statusCode: 405, headers: CORS, body: JSON.stringify({ error:'Méthode non autorisée' }) };
 
   // Détermine la stratégie qui fonctionne (test en lecture)
   const resoudreAuth = async () => {
