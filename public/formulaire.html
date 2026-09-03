@@ -179,7 +179,7 @@ $('btnSend').addEventListener('click', async function () {
     const data = await res.json().catch(function(){ return {}; });
     if (!res.ok || !data.ok) throw new Error(data.error || ('Erreur ' + res.status));
 
-    $('msg').innerHTML = '<div class="ok">✓ Demande enregistrée sous le n° <strong>' + data.id + '</strong>. Elle apparaît désormais dans l\'application, en attente de validation par l\'APC.</div>';
+    $('msg').innerHTML = '<div class="ok">✓ Demande enregistrée sous le n° <strong>' + data.id + '</strong>. Elle apparaît désormais dans l\'application, transmise à la Commission FNPC pour validation.</div>';
     document.querySelectorAll('input, textarea').forEach(function(el){ el.value = ''; });
     $('medal').value = '';
     majRecap();

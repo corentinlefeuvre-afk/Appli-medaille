@@ -66,7 +66,8 @@ export const handler = async (event) => {
     if (!auth) await resoudreAuth();
     const res = await call(path, opts, auth.h(auth.key));
     if (!res.ok) throw new Error(`Supabase ${res.status} : ${await res.text()}`);
-    return res.status === 204 ? null : res.json();
+    const txt = await res.text();          // corps vide après une écriture (Prefer: return=minimal)
+    return txt ? JSON.parse(txt) : null;
   };
 
   try {
@@ -107,7 +108,7 @@ export const handler = async (event) => {
     const commentaire = [clean(p.commentaire, 2000), `Agrafe souhaitée : ${AGRAFE}`].filter(Boolean).join(' — ');
 
     const demande = {
-      id, diplomeId:null, statut:'soumis',
+      id, diplomeId:null, statut:'en_commission',
       benevole: {
         id: `${prenom}-${nom}`.toLowerCase().replace(/\W+/g,'-'), type:'benevole',
         nom, prenom, genre: p.genre === 'F' ? 'F' : 'M', annee,
@@ -121,13 +122,14 @@ export const handler = async (event) => {
       paiement: medal.payant ? 'en_attente' : null, expedition:null,
       justification: just, dateReception:'',
       commentaire,
-      historique: [{ date: today, action:'Demande soumise via le formulaire', auteur: demandeur, comment:'Saisie hors application' }],
+      commissionVotes: [],
+      historique: [{ date: today, action:'Demande soumise via le formulaire', auteur: demandeur, comment:"Saisie hors application — transmise directement à la Commission FNPC." }],
     };
 
     await sb('app_requests', {
       method:'POST',
       headers:{ Prefer:'return=minimal' },
-      body: JSON.stringify({ id, data: demande, dept, statut:'soumis' }),
+      body: JSON.stringify({ id, data: demande, dept, statut:'en_commission' }),
     });
 
     return { statusCode: 200, headers: CORS, body: JSON.stringify({ ok:true, id }) };
