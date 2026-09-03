@@ -12,7 +12,7 @@ const PS_AUTH = 'Basic ' + Buffer.from(PS_KEY + ':').toString('base64');
 // Timeout en ms pour éviter qu'une PS lente bloque indéfiniment
 const TIMEOUT_MS = 15000;
 
-exports.handler = async (event) => {
+export const handler = async (event) => {
   const headers = {
     'Access-Control-Allow-Origin':  '*',   // autorise aussi les previews Netlify
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',

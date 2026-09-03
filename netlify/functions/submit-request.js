@@ -21,7 +21,7 @@ const MEDALS = {
 const AGRAFE = 'Feux de Forêt';
 const clean = (v, max = 300) => String(v ?? '').trim().slice(0, max);
 
-exports.handler = async (event) => {
+export const handler = async (event) => {
   const CORS = { 'Access-Control-Allow-Origin':'*', 'Access-Control-Allow-Headers':'Content-Type', 'Access-Control-Allow-Methods':'POST, OPTIONS' };
   if (event.httpMethod === 'OPTIONS') return { statusCode: 204, headers: CORS, body: '' };
   if (event.httpMethod !== 'POST')   return { statusCode: 405, headers: CORS, body: JSON.stringify({ error:'Méthode non autorisée' }) };

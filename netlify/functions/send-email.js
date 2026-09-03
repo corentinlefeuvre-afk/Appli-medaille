@@ -1,3 +1,4 @@
+import nodemailer from 'nodemailer';
 // netlify/functions/send-email.js
 // Envoi d'e-mails côté serveur via SMTP (nodemailer).
 // Tourne côté Netlify → pas de CORS, et les identifiants SMTP ne sont jamais exposés au navigateur.
@@ -11,9 +12,7 @@
 // En prod sur vos serveurs : pointez SMTP_HOST vers votre serveur mail interne.
 // Pour swapper vers un fournisseur (Brevo, Resend…), seul ce fichier change.
 
-const nodemailer = require('nodemailer');
-
-exports.handler = async (event) => {
+export const handler = async (event) => {
   const headers = {
     'Access-Control-Allow-Origin':  '*',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
