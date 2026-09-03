@@ -64,7 +64,9 @@ export const handler = async (event) => {
       url: URL_SB,
       cleSecrete: KEY_SB
         ? { debut: KEY_SB.slice(0, 14), longueur: KEY_SB.length,
-            format: /^sb_secret_/.test(KEY_SB) ? 'nouveau (sb_secret_)' : (/^eyJ/.test(KEY_SB) ? 'ancien (JWT service_role)' : 'inconnu') }
+            format: /^sb_secret_/.test(KEY_SB) ? 'nouveau (sb_secret_)' : (/^eyJ/.test(KEY_SB) ? 'ancien (JWT service_role)' : 'inconnu'),
+            caracteresValides: /^[A-Za-z0-9_-]+$/.test(KEY_SB),
+            caracteresSuspects: [...new Set(KEY_SB.replace(/[A-Za-z0-9_-]/g, '').split(''))].join(' ') || 'aucun' }
         : 'absente',
       clePublique: { debut: KEY_FALLBACK.slice(0, 18), longueur: KEY_FALLBACK.length },
       essais,

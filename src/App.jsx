@@ -12,7 +12,7 @@ export { ErrorBoundary };
 
 
 const APP_TITLE   = "Demande Médaille FNPC";
-const APP_VERSION = "1.6.25";
+const APP_VERSION = "1.6.26";
 const USE_SUPABASE = true;
 
 // ── PrestaShop Webservice ────────────────────────────────────────────────────
