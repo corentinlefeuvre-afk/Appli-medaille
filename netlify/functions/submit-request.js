@@ -26,8 +26,8 @@ export const handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 204, headers: CORS, body: '' };
   if (event.httpMethod !== 'POST')   return { statusCode: 405, headers: CORS, body: JSON.stringify({ error:'Méthode non autorisée' }) };
 
-  const URL_SB = process.env.SUPABASE_URL;
-  const KEY_SB = process.env.SUPABASE_SERVICE_KEY;
+  const URL_SB = (process.env.SUPABASE_URL || '').trim().replace(/\/+$/, '');
+  const KEY_SB = (process.env.SUPABASE_SERVICE_KEY || '').trim().replace(/^Bearer\s+/i, '');
   if (!URL_SB || !KEY_SB) {
     return { statusCode: 500, headers: CORS, body: JSON.stringify({ error:"Configuration serveur incomplète (SUPABASE_URL / SUPABASE_SERVICE_KEY manquantes dans Netlify)." }) };
   }
@@ -37,7 +37,14 @@ export const handler = async (event) => {
       ...opts,
       headers: { apikey: KEY_SB, Authorization: `Bearer ${KEY_SB}`, 'Content-Type':'application/json', ...(opts.headers||{}) },
     });
-    if (!res.ok) throw new Error(`Supabase ${res.status} : ${await res.text()}`);
+    if (!res.ok) {
+      const txt = await res.text();
+      if (res.status === 401 || res.status === 403) {
+        const apercu = KEY_SB ? `${KEY_SB.slice(0, 11)}…(${KEY_SB.length} car.)` : 'vide';
+        throw new Error(`Clé Supabase refusée (${res.status}). Clé lue : ${apercu}. Vérifiez que SUPABASE_SERVICE_KEY contient la « Secret key » (sb_secret_… ou service_role), sans espace ni retour à la ligne, et que SUPABASE_URL est correcte (${URL_SB || 'vide'}).`);
+      }
+      throw new Error(`Supabase ${res.status} : ${txt}`);
+    }
     return res.status === 204 ? null : res.json();
   };
 
