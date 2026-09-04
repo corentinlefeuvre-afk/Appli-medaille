@@ -28,6 +28,13 @@
   .warn{background:#fffbeb;border:1px solid #fbbf24;border-radius:8px;padding:10px 13px;font-size:13px;color:#92400e;margin-top:8px}
   .err{background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:10px 13px;font-size:13px;color:#dc2626;margin-bottom:12px}
   .ok{background:#ecfdf5;border:1px solid #6ee7b7;border-radius:8px;padding:12px 14px;font-size:14px;color:#047857;margin-bottom:12px}
+  table#grid{width:100%;border-collapse:collapse;font-size:13px}
+  table#grid th{background:#f8faff;color:#1B3764;font-size:11px;text-transform:uppercase;letter-spacing:.4px;text-align:left;padding:8px 6px;border-bottom:2px solid #e5e7eb;white-space:nowrap}
+  table#grid td{padding:5px 4px;border-bottom:1px solid #f1f5f9;vertical-align:top}
+  table#grid input,table#grid select,table#grid textarea{padding:7px 8px;font-size:13px}
+  table#grid textarea{min-height:38px;resize:vertical}
+  .del{background:none;border:none;color:#dc2626;font-size:16px;font-weight:bold;cursor:pointer;padding:6px}
+  .late{background:#fffbeb !important;border-color:#fbbf24 !important}
   #recap{white-space:pre-wrap;font-family:monospace;font-size:12px;background:#f8faff;border:1px solid #e5e7eb;border-radius:8px;padding:14px;max-height:300px;overflow:auto}
 </style>
 </head>
@@ -52,32 +59,50 @@
   </div>
 
   <div class="card">
-    <div class="st">2. Récipiendaire</div>
-    <div class="row">
-      <div class="fg"><label>Nom *</label><input id="nom" placeholder="DUPONT"></div>
-      <div class="fg"><label>Prénom *</label><input id="prenom" placeholder="Marie"></div>
-    </div>
-    <div class="row">
-      <div class="fg"><label>Genre</label><select id="genre"><option value="M">Masculin</option><option value="F">Féminin</option></select></div>
-      <div class="fg"><label>Année d'adhésion *</label><input id="annee" type="number" placeholder="2015" min="1950" max="2100"></div>
-    </div>
-    <div class="fg"><label>Fonctions / compétences</label><input id="fonctions" placeholder="Chef d'intervention, formateur PSC1…"></div>
-    <div class="fg"><label>Distinctions déjà obtenues</label><input id="distinctions" placeholder="Bronze 2018, Argent 2023…"></div>
-  </div>
+    <div class="st">2. Récipiendaires et distinctions</div>
+    <p style="font-size:13px;color:#64748b;margin:0 0 12px">Une ligne par personne. Vous pouvez saisir plusieurs récipiendaires d'un coup, ou coller directement depuis Excel.</p>
 
-  <div class="card">
-    <div class="st">3. Distinction demandée</div>
-    <div class="fg"><label>Distinction *</label><select id="medal"></select><div id="delaiWarn"></div></div>
-    <div class="fg"><label>Motivations *  <span class="hint">(détaillez précisément, surtout si le délai n'est pas atteint)</span></label><textarea id="just" rows="5" placeholder="Actions menées, engagement, faits marquants…"></textarea></div>
-    <div class="fg"><label>Agrafe</label><input value="Feux de Forêt" readonly style="background:#f8faff;color:#64748b"><div class="hint" style="margin-top:4px">Cette demande porte sur l'agrafe Feux de Forêt.</div></div>
-    <div class="fg"><label>Commentaire complémentaire</label><textarea id="commentaire" rows="2" placeholder="Précisions éventuelles"></textarea></div>
+    <div style="overflow-x:auto">
+      <table id="grid">
+        <thead><tr>
+          <th style="min-width:130px">Nom *</th>
+          <th style="min-width:120px">Prénom *</th>
+          <th style="min-width:90px">Genre</th>
+          <th style="min-width:95px">Année adh. *</th>
+          <th style="min-width:150px">Distinction *</th>
+          <th style="min-width:150px">Fonctions</th>
+          <th style="min-width:150px">Distinctions obtenues</th>
+          <th style="min-width:230px">Motivations *</th>
+          <th style="width:34px"></th>
+        </tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px">
+      <button type="button" class="btn btn-outline" id="btnAdd">+ Ajouter une ligne</button>
+      <button type="button" class="btn btn-outline" id="btnPaste">📋 Coller depuis Excel</button>
+    </div>
+
+    <div id="pasteBox" style="display:none;margin-top:12px">
+      <label>Collez vos lignes Excel ci-dessous <span class="hint">(colonnes dans l'ordre : Nom, Prénom, Genre, Année, Distinction, Fonctions, Distinctions obtenues, Motivations)</span></label>
+      <textarea id="pasteData" rows="5" placeholder="DUPONT&#9;Marie&#9;F&#9;2015&#9;bronze&#9;Formatrice&#9;&#9;Engagement remarquable…"></textarea>
+      <div style="display:flex;gap:10px;margin-top:8px">
+        <button type="button" class="btn btn-orange" id="btnPasteOk">Importer les lignes</button>
+        <button type="button" class="btn btn-outline" id="btnPasteCancel">Annuler</button>
+      </div>
+      <div class="hint" style="margin-top:6px">Pour la distinction, indiquez : temoignage, bronze, argent, vermeil, grand_or, gm_argent ou gm_or (ou le libellé complet).</div>
+    </div>
+
+    <div class="fg" style="margin-top:18px"><label>Agrafe</label><input value="Feux de Forêt" readonly style="background:#f8faff;color:#64748b;max-width:320px"><div class="hint" style="margin-top:4px">Toutes les demandes de ce formulaire portent sur l'agrafe Feux de Forêt.</div></div>
+    <div class="fg"><label>Commentaire complémentaire <span class="hint">(commun à toutes les lignes)</span></label><textarea id="commentaire" rows="2" placeholder="Précisions éventuelles"></textarea></div>
   </div>
 
   <div class="card">
     <div class="st">4. Envoi</div>
     <div id="msg"></div>
     <div class="warn" style="margin-top:0;margin-bottom:14px">⚠️ Vérifiez que les règles sont respectées (ancienneté, motivations détaillées). Dans le cas contraire, la demande pourra être refusée par le ou les niveaux supérieurs.</div>
-    <button type="button" class="btn btn-orange" id="btnSend">✓ Envoyer la demande</button>
+    <button type="button" class="btn btn-orange" id="btnSend">✓ Envoyer les demandes</button>
     <div class="fg" style="margin-top:16px"><label>Récapitulatif</label><div id="recap">—</div></div>
   </div>
 </main>
@@ -103,61 +128,142 @@ const today = () => new Date().toISOString().split('T')[0];
 $('dept').innerHTML = '<option value="">— Choisir —</option>' + DEPTS.map(function(d){ return '<option value="'+d[0]+'">'+d[1]+'</option>'; }).join('');
 $('medal').innerHTML = '<option value="">— Choisir —</option>' + MEDALS.map(m=>'<option value="'+m.id+'">'+m.label+' ('+m.years+' ans)</option>').join('');
 
-function anciennete(){
-  const a = parseInt($('annee').value,10);
-  return a ? (new Date().getFullYear() - a) : null;
+// ── Lignes du tableau ──
+const COLS = ['nom','prenom','genre','annee','medal','fonctions','distinctions','just'];
+let seq = 0;
+
+function optionsMedals(sel){ return '<option value="">—</option>' + MEDALS.map(function(m){ return '<option value="'+m.id+'"'+(m.id===sel?' selected':'')+'>'+m.shortLabel+' ('+m.years+' ans)</option>'; }).join(''); }
+
+function ajouterLigne(v){
+  v = v || {};
+  const id = 'r' + (++seq);
+  const tr = document.createElement('tr');
+  tr.dataset.id = id;
+  tr.innerHTML =
+    '<td><input data-c="nom" placeholder="DUPONT" value="'+(v.nom||'')+'"></td>' +
+    '<td><input data-c="prenom" placeholder="Marie" value="'+(v.prenom||'')+'"></td>' +
+    '<td><select data-c="genre"><option value="M"'+(v.genre==='F'?'':' selected')+'>M</option><option value="F"'+(v.genre==='F'?' selected':'')+'>F</option></select></td>' +
+    '<td><input data-c="annee" type="number" min="1950" max="2100" placeholder="2015" value="'+(v.annee||'')+'"></td>' +
+    '<td><select data-c="medal">'+optionsMedals(v.medal)+'</select></td>' +
+    '<td><input data-c="fonctions" placeholder="Formateur PSC1…" value="'+(v.fonctions||'')+'"></td>' +
+    '<td><input data-c="distinctions" placeholder="Bronze 2018…" value="'+(v.distinctions||'')+'"></td>' +
+    '<td><textarea data-c="just" placeholder="Actions menées, engagement…">'+(v.just||'')+'</textarea></td>' +
+    '<td><button type="button" class="del" title="Supprimer la ligne">✕</button></td>';
+  $('rows').appendChild(tr);
+  tr.querySelector('.del').addEventListener('click', function(){ tr.remove(); if(!$('rows').children.length) ajouterLigne(); majRecap(); });
+  tr.querySelectorAll('input,select,textarea').forEach(function(el){ el.addEventListener('input', majRecap); });
+  return tr;
 }
+
+function lireLigne(tr){
+  const o = { _tr: tr };
+  COLS.forEach(function(c){ const el = tr.querySelector('[data-c="'+c+'"]'); o[c] = el ? el.value.trim() : ''; });
+  return o;
+}
+function lignes(){ return Array.prototype.map.call($('rows').children, lireLigne); }
+function ligneVide(l){ return COLS.every(function(c){ return c==='genre' ? true : !l[c]; }); }
+
+function ancienneteDe(l){ const a = parseInt(l.annee,10); return a ? (new Date().getFullYear() - a) : null; }
+
+// Signale visuellement les délais non atteints
 function majDelai(){
-  const m = MEDALS.find(x=>x.id===$('medal').value);
-  const ans = anciennete();
-  $('delaiWarn').innerHTML = (m && ans!==null && ans < m.years)
-    ? '<div class="warn">⚡ <strong>Délai non atteint</strong> ('+ans+' an(s) pour '+m.years+' ans requis). Cette distinction ne sera accordée que pour faits exceptionnels : détaillez précisément les motivations.</div>'
-    : '';
+  lignes().forEach(function(l){
+    const m = MEDALS.find(function(x){ return x.id === l.medal; });
+    const ans = ancienneteDe(l);
+    const champ = l._tr.querySelector('[data-c="annee"]');
+    const retard = m && ans !== null && ans < m.years;
+    champ.classList.toggle('late', !!retard);
+    champ.title = retard ? 'Délai non atteint : ' + ans + ' an(s) pour ' + m.years + ' ans requis — détaillez les motivations.' : '';
+  });
 }
-function donnees(){
-  const m = MEDALS.find(x=>x.id===$('medal').value);
+
+function donneesCommunes(){
   return {
     'E-mail demandeur': $('email').value.trim(),
     'Demandeur': $('demandeur').value.trim(),
     'Département (APC)': $('dept').value,
     'Antenne': $('antenne').value.trim(),
-    'Nom': $('nom').value.trim(),
-    'Prénom': $('prenom').value.trim(),
-    'Genre': $('genre').value==='M'?'Masculin':'Féminin',
-    "Année d'adhésion": $('annee').value,
-    'Ancienneté (ans)': anciennete() === null ? '' : anciennete(),
-    'Fonctions / compétences': $('fonctions').value.trim(),
-    'Distinctions obtenues': $('distinctions').value.trim(),
-    'Distinction demandée': m ? m.label : '',
-    'Motivations': $('just').value.trim(),
     'Agrafe': AGRAFE,
     'Commentaire': $('commentaire').value.trim(),
   };
 }
+
 function majRecap(){
   majDelai();
-  const lignes = Object.entries(donnees())
-    .filter(function(e){ return e[1] !== '' && e[1] !== null && e[1] !== undefined; })
-    .map(function(e){ return e[0] + ' : ' + e[1]; });
-  $('recap').textContent = lignes.join('\n') || '—';
+  const c = donneesCommunes();
+  const entete = Object.entries(c).filter(function(e){ return e[1]; }).map(function(e){ return e[0] + ' : ' + e[1]; }).join('\n');
+  const utiles = lignes().filter(function(l){ return !ligneVide(l); });
+  const corps = utiles.map(function(l, i){
+    const m = MEDALS.find(function(x){ return x.id === l.medal; });
+    const ans = ancienneteDe(l);
+    return '\n— Ligne ' + (i+1) + ' : ' + [l.prenom, l.nom].filter(Boolean).join(' ') +
+           (m ? ' | ' + m.label : '') +
+           (ans !== null ? ' | ' + ans + ' an(s)' : '') +
+           (l.just ? '\n   Motivations : ' + l.just : '');
+  }).join('\n');
+  const nb = utiles.length;
+  $('recap').textContent = (entete + (corps ? '\n' + corps : '') + '\n\nTotal : ' + nb + ' demande(s)').trim() || '—';
 }
+
 function manquants(){
-  const req = [['email','Votre e-mail'],['demandeur','Nom du demandeur'],['dept','Département de rattachement'],
-               ['nom','Nom'],['prenom','Prénom'],['annee',"Année d'adhésion"],
-               ['medal','Distinction'],['just','Motivations']];
-  return req.filter(function(r){ return !$(r[0]).value.trim(); }).map(function(r){ return r[1]; });
+  const m = [];
+  if (!$('email').value.trim())     m.push('votre e-mail');
+  if (!$('demandeur').value.trim()) m.push('nom du demandeur');
+  if (!$('dept').value)             m.push('département de rattachement');
+  const utiles = lignes().filter(function(l){ return !ligneVide(l); });
+  if (!utiles.length) { m.push('au moins un récipiendaire'); return m; }
+  utiles.forEach(function(l, i){
+    const manque = [];
+    if (!l.nom)    manque.push('nom');
+    if (!l.prenom) manque.push('prénom');
+    if (!l.annee)  manque.push("année d'adhésion");
+    if (!l.medal)  manque.push('distinction');
+    if (!l.just)   manque.push('motivations');
+    if (manque.length) m.push('ligne ' + (i+1) + ' (' + manque.join(', ') + ')');
+  });
+  return m;
 }
 
-// ── Envoi via la fonction serveur (aucune clé dans cette page) ──
+// ── Collage depuis Excel ──
+$('btnAdd').addEventListener('click', function(){ ajouterLigne(); majRecap(); });
+$('btnPaste').addEventListener('click', function(){ $('pasteBox').style.display = 'block'; $('pasteData').focus(); });
+$('btnPasteCancel').addEventListener('click', function(){ $('pasteBox').style.display = 'none'; $('pasteData').value = ''; });
+$('btnPasteOk').addEventListener('click', function(){
+  const brut = $('pasteData').value.trim();
+  if (!brut) return;
+  let n = 0;
+  brut.split(/\r?\n/).forEach(function(ligne){
+    if (!ligne.trim()) return;
+    const c = ligne.split('\t');
+    const medalBrut = (c[4]||'').trim().toLowerCase();
+    const m = MEDALS.find(function(x){ return x.id === medalBrut || x.label.toLowerCase() === medalBrut || x.shortLabel.toLowerCase() === medalBrut; });
+    ajouterLigne({
+      nom:(c[0]||'').trim(), prenom:(c[1]||'').trim(),
+      genre:((c[2]||'').trim().toUpperCase().charAt(0) === 'F') ? 'F' : 'M',
+      annee:(c[3]||'').trim(), medal: m ? m.id : '',
+      fonctions:(c[5]||'').trim(), distinctions:(c[6]||'').trim(), just:(c[7]||'').trim(),
+    });
+    n++;
+  });
+  // retire les lignes vides initiales
+  Array.prototype.slice.call($('rows').children).forEach(function(tr){
+    if (ligneVide(lireLigne(tr)) && $('rows').children.length > 1) tr.remove();
+  });
+  $('pasteBox').style.display = 'none'; $('pasteData').value = '';
+  $('msg').innerHTML = '<div class="ok">' + n + ' ligne(s) importée(s) — vérifiez les distinctions et complétez si nécessaire.</div>';
+  majRecap();
+});
 
+// ── Envoi ──
 $('btnSend').addEventListener('click', async function () {
   const m = manquants();
-  if (m.length) { $('msg').innerHTML = '<div class="err">Champs obligatoires manquants : ' + m.join(', ') + '.</div>'; return; }
+  if (m.length) { $('msg').innerHTML = '<div class="err">Éléments manquants : ' + m.join(' ; ') + '.</div>'; return; }
 
   const btn = $('btnSend');
   btn.disabled = true; btn.textContent = 'Envoi en cours…';
   $('msg').innerHTML = '';
   try {
+    const utiles = lignes().filter(function(l){ return !ligneVide(l); });
     const res = await fetch(ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -166,38 +272,39 @@ $('btnSend').addEventListener('click', async function () {
         demandeur: $('demandeur').value.trim(),
         dept: $('dept').value,
         antenne: $('antenne').value.trim(),
-        nom: $('nom').value.trim(),
-        prenom: $('prenom').value.trim(),
-        genre: $('genre').value,
-        annee: $('annee').value,
-        fonctions: $('fonctions').value.trim(),
-        distinctions: $('distinctions').value.trim(),
-        medal: $('medal').value,
-        just: $('just').value.trim(),
         commentaire: $('commentaire').value.trim(),
+        lignes: utiles.map(function(l){
+          return { nom:l.nom, prenom:l.prenom, genre:l.genre, annee:l.annee,
+                   medal:l.medal, fonctions:l.fonctions, distinctions:l.distinctions, just:l.just };
+        }),
       }),
     });
     const data = await res.json().catch(function(){ return {}; });
     if (!res.ok || !data.ok) throw new Error(data.error || ('Erreur ' + res.status));
 
-    // Page de confirmation dédiée (remplace le formulaire)
+    const ids = (data.ids || []).join(', ');
     document.querySelector('main').innerHTML =
       '<div class="card" style="text-align:center;padding:48px 26px">' +
         '<div style="font-size:52px;line-height:1;margin-bottom:14px">✓</div>' +
-        '<div style="font-size:20px;font-weight:bold;color:#1B3764;margin-bottom:10px">Demande enregistrée sous le n° ' + data.id + '</div>' +
+        '<div style="font-size:20px;font-weight:bold;color:#1B3764;margin-bottom:10px">' +
+          (data.ids && data.ids.length > 1
+            ? data.ids.length + ' demandes enregistrées'
+            : 'Demande enregistrée sous le n° ' + ids) + '</div>' +
+        (data.ids && data.ids.length > 1 ? '<p style="font-size:13px;color:#64748b;margin:0 0 6px">N° : ' + ids + '</p>' : '') +
         '<p style="font-size:15px;color:#374151;margin:0 0 26px">En attente de validation par la Commission.</p>' +
-        '<button type="button" class="btn btn-orange" onclick="location.reload()">Saisir une nouvelle demande</button>' +
+        '<button type="button" class="btn btn-orange" onclick="location.reload()">Saisir de nouvelles demandes</button>' +
       '</div>';
     window.scrollTo({ top: 0 });
     return;
   } catch (e) {
     $('msg').innerHTML = '<div class="err">Échec de l\'envoi : ' + e.message + '<br>Vérifiez votre connexion, puis réessayez. Si le problème persiste, contactez la Gestion FNPC.</div>';
   } finally {
-    btn.disabled = false; btn.textContent = '✓ Envoyer la demande';
+    btn.disabled = false; btn.textContent = '✓ Envoyer les demandes';
   }
 });
 
-document.querySelectorAll('input, select, textarea').forEach(function(el){ el.addEventListener('input', majRecap); });
+ajouterLigne();
+['email','demandeur','dept','antenne','commentaire'].forEach(function(id){ $(id).addEventListener('input', majRecap); });
 majRecap();
 </script>
 </body>
