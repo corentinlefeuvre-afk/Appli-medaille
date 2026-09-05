@@ -12,7 +12,7 @@ export { ErrorBoundary };
 
 
 const APP_TITLE   = "Demande Médaille FNPC";
-const APP_VERSION = "1.7.2";
+const APP_VERSION = "1.7.4";
 const USE_SUPABASE = true;
 
 // ── PrestaShop Webservice ────────────────────────────────────────────────────
@@ -399,7 +399,7 @@ export default function App() {
           catch { setDraftSavedAt(null); }
         }
       })();
-      const t = setInterval(autosaveDraft, 30000);
+      const t = setInterval(() => { autosaveDraft(); autosaveMulti(); }, 30000);
       return () => clearInterval(t);
     }
     // Auto-chargement ID produit PrestaShop
@@ -835,6 +835,38 @@ export default function App() {
   const [calField, setCalField] = useState('nom');
   const calPageRef = useRef(null);
   const calDrag = useRef(null);
+  const MULTI_DRAFT_KEY = 'fnpc_multi_draft';
+  const [multiDraftAt, setMultiDraftAt] = useState(null);
+
+  const autosaveMulti = () => {
+    const utiles = multiLignes.filter(l => l.nom?.trim() || l.prenom?.trim() || l.medal || l.just?.trim());
+    if (!utiles.length) return;                       // ne pas sauver un brouillon vide
+    const payload = { multiLignes, multiDept, multiAgrafe, multiEmail, multiDemandeur,
+                      multiDateRecep, multiCommentaire, multiNotif, savedAt: new Date().toISOString() };
+    try { localStorage.setItem(MULTI_DRAFT_KEY, JSON.stringify(payload)); } catch {}
+    setMultiDraftAt(payload.savedAt);
+  };
+  const restoreMulti = () => {
+    try {
+      const d = JSON.parse(localStorage.getItem(MULTI_DRAFT_KEY) || 'null');
+      if (!d || !Array.isArray(d.multiLignes) || !d.multiLignes.length) { fire('Aucun brouillon enregistré.', 'err'); return; }
+      setMultiLignes(d.multiLignes);
+      if (d.multiDept) setMultiDept(d.multiDept);
+      setMultiAgrafe(d.multiAgrafe || '');
+      setMultiEmail(d.multiEmail || ''); setMultiDemandeur(d.multiDemandeur || '');
+      setMultiDateRecep(d.multiDateRecep || ''); setMultiCommentaire(d.multiCommentaire || '');
+      setMultiNotif(d.multiNotif ?? true);
+      setMultiDraftAt(d.savedAt);
+      fire('Brouillon restauré ✓');
+    } catch { fire('Brouillon illisible.', 'err'); }
+  };
+  const effacerMulti = () => {
+    try { localStorage.removeItem(MULTI_DRAFT_KEY); } catch {}
+    setMultiDraftAt(null);
+    setMultiLignes([ligneVide()]);
+    fire('Brouillon effacé ✓');
+  };
+
   const autosaveDraft = () => {
     if (!nrNom && !nrPrenom && !nrMedal) return; // Ne pas sauver un brouillon vide
     const payload = { nrNom, nrPrenom, nrAdhesion, nrGenre, nrAnnee, nrMedal, nrJust, nrFonctions, nrDistinctions, nrDateRecep, nrEmail, nrNotif, nrCommentaire, nrDept, nrDemandeur, nrAgrafe, nrAgrafeDepts, savedAt: new Date().toISOString() };
@@ -884,7 +916,7 @@ export default function App() {
   };
 
   // ── Création en lot (saisie multiple) ──
-  const ligneVide = () => ({ nom:'', prenom:'', genre:'M', adhesion:'', medal:'', fonctions:'', distinctions:'', just:'', recherche:'', volId:'', trouve:null });
+  const ligneVide = () => ({ type:'benevole', medalOpen:false, nom:'', prenom:'', genre:'M', adhesion:'', medal:'', fonctions:'', distinctions:'', just:'', recherche:'', volId:'', trouve:null });
   const ansDepuis = (d) => {
     if (!d) return null;
     const dt = new Date(d); if (isNaN(dt)) return null;
@@ -907,10 +939,14 @@ export default function App() {
     const erreurs = [];
     utiles.forEach((l, i) => {
       const manque = [];
+      const special = (l.type || 'benevole') !== 'benevole';
       if (!l.nom.trim())    manque.push('nom');
-      if (!l.prenom.trim()) manque.push('prénom');
-      if (!l.adhesion)      manque.push("date d'adhésion");
-      else if (new Date(l.adhesion) > new Date()) manque.push("date d'adhésion dans le futur");
+      if (!special && !l.prenom.trim()) manque.push('prénom');
+      if (!special) {
+        if (!l.adhesion) manque.push("date d'adhésion");
+        else if (new Date(l.adhesion) > new Date()) manque.push("date d'adhésion dans le futur");
+      }
+      if (special && !typeAllowed(l.type)) manque.push('type non autorisé pour ce département');
       if (!l.medal)         manque.push('distinction');
       if (!l.just.trim())   manque.push('motivations');
       else if (l.just.trim().length < 50) manque.push('motivations trop brèves (50 caractères minimum)');
@@ -926,15 +962,16 @@ export default function App() {
       let n = requests.length;
       const nouvelles = utiles.map(l => {
         const medalType = medalTypes.find(m => m.id === l.medal);
-        const ans = ansDepuis(l.adhesion);
+        const special = (l.type || 'benevole') !== 'benevole';
+        const ans = special ? null : ansDepuis(l.adhesion);
         const isTemoig = medalType.category === 'temoignage';
         return {
           id:`REQ-${new Date().getFullYear()}-${String(++n).padStart(3,'0')}`,
           diplomeId:null, statut:targetStatut,
-          benevole:{ id: l.volId || `${l.prenom}-${l.nom}`.toLowerCase().replace(/\W+/g,'-'), type:'benevole',
-            nom:l.nom.trim(), prenom:l.prenom.trim(), genre:l.genre,
-            annee:new Date(l.adhesion).getFullYear(), antenne:authUser?.antenne||'', dept,
-            adhesion:l.adhesion, ans, fonctions:l.fonctions.trim(), distinctions:l.distinctions.trim() },
+          benevole:{ id: l.volId || `${l.prenom}-${l.nom}`.toLowerCase().replace(/\W+/g,'-'), type: l.type || 'benevole',
+            nom:l.nom.trim(), prenom: special ? '' : l.prenom.trim(), genre: special ? null : l.genre,
+            annee: special ? null : new Date(l.adhesion).getFullYear(), antenne: special ? l.nom.trim() : (authUser?.antenne||''), dept,
+            adhesion: special ? null : l.adhesion, ans, fonctions:l.fonctions.trim(), distinctions:l.distinctions.trim() },
           medalType, demandeur: multiDemandeur.trim() || ROLES[role].org, emailDemandeur: multiEmail.trim() || authUser?.email || '', dept, niveau:role,
           dateCreation:today(), notifications:multiNotif,
           agrafe: !isTemoig && !!multiAgrafe, agrafeDepts: (!isTemoig && multiAgrafe) ? [multiAgrafe] : [],
@@ -947,6 +984,7 @@ export default function App() {
       setRequests(p => [...nouvelles.slice().reverse(), ...p]);
       setMultiLignes([ligneVide()]);
       setMultiAgrafe(''); setMultiCommentaire(''); setMultiDateRecep('');
+      try { localStorage.removeItem(MULTI_DRAFT_KEY); } catch {} setMultiDraftAt(null);
       setPage('demandes');
       fire(`${nouvelles.length} demande(s) créée(s) ✓`);
     };
@@ -2011,12 +2049,12 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
                   <span style={{ fontSize:12, fontWeight:700, color:'#1B3764', textTransform:'uppercase', letterSpacing:'.6px' }}>Récipiendaire {i+1}</span>
                   <button className="btn btn-outline btn-sm" onClick={()=>setMultiLignes(p => p.length>1 ? p.filter((_,k)=>k!==i) : [ligneVide()])}>✕</button>
                 </div>
-                <div style={{ display:'flex', gap:8, marginBottom:10 }}>
+                {(l.type||'benevole')==='benevole' && <div style={{ display:'flex', gap:8, marginBottom:10 }}>
                   <input className="input" style={{ flex:1 }} placeholder="🔍 Rechercher dans E-Protec (nom ou identifiant)…"
                     value={l.recherche} onChange={e=>maj(i,'recherche',e.target.value)}
                     onKeyDown={e=>{ if(e.key==='Enter'){ e.preventDefault(); chercherVol(i); } }}/>
                   <button className="btn btn-primary btn-sm" onClick={()=>chercherVol(i)}>Rechercher</button>
-                </div>
+                </div>}
                 {l.trouve && <div style={{ background:'#f0fdf4', border:'1px solid #86efac', borderRadius:8, padding:'8px 12px', marginBottom:10, fontSize:12, color:'#047857' }}>
                   ✓ <strong>{l.trouve.prenom} {l.trouve.nom}</strong> — {l.trouve.antenne||l.trouve.dept} · {l.trouve.ans} ans · adhésion {l.trouve.adhesion}
                 </div>}
@@ -2024,15 +2062,57 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
                   Aucun bénévole trouvé — complétez les champs manuellement.
                 </div>}
                 <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))', gap:10 }}>
-                  <div><label className="fl">Nom *</label><input className="input" value={l.nom} onChange={e=>maj(i,'nom',e.target.value)} placeholder="DUPONT"/></div>
-                  <div><label className="fl">Prénom *</label><input className="input" value={l.prenom} onChange={e=>maj(i,'prenom',e.target.value)} placeholder="Marie"/></div>
-                  <div><label className="fl">Genre</label><select className="select" value={l.genre} onChange={e=>maj(i,'genre',e.target.value)}><option value="M">Masculin</option><option value="F">Féminin</option></select></div>
-                  <div><label className="fl">Date d'adhésion *</label><input className="input" type="date" value={l.adhesion} onChange={e=>maj(i,'adhesion',e.target.value)}/></div>
-                  <div style={{ gridColumn:'span 2' }}><label className="fl">Distinction *</label>
-                    <select className="select" value={l.medal} onChange={e=>maj(i,'medal',e.target.value)}>
-                      <option value="">— Choisir la distinction —</option>
-                      {medalTypes.map(x=><option key={x.id} value={x.id}>{x.label} ({x.years} ans)</option>)}
-                    </select></div>
+                  {allowedSpecialTypes.length > 0 && <div style={{ gridColumn:'1/-1' }}><label className="fl">Type de récipiendaire</label>
+                    <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+                      <button className={`tab ${(l.type||'benevole')==='benevole'?'active':''}`} onClick={()=>maj(i,'type','benevole')}>👤 Bénévole</button>
+                      {allowedSpecialTypes.map(t=><button key={t.id} className={`tab ${l.type===t.id?'active':''}`} onClick={()=>maj(i,'type',t.id)}>{t.icon} {t.label}</button>)}
+                    </div></div>}
+                  {(l.type||'benevole')!=='benevole'
+                    ? <div style={{ gridColumn:'1/-1' }}><label className="fl">Nom — {SPECIAL_RECIPIENT_TYPES.find(t=>t.id===l.type)?.label||''} *</label><input className="input" value={l.nom} onChange={e=>maj(i,'nom',e.target.value)} placeholder={SPECIAL_RECIPIENT_TYPES.find(t=>t.id===l.type)?.placeholder||''}/></div>
+                    : <>
+                      <div><label className="fl">Nom *</label><input className="input" value={l.nom} onChange={e=>maj(i,'nom',e.target.value)} placeholder="DUPONT"/></div>
+                      <div><label className="fl">Prénom *</label><input className="input" value={l.prenom} onChange={e=>maj(i,'prenom',e.target.value)} placeholder="Marie"/></div>
+                    </>}
+                  {(l.type||'benevole')==='benevole' && <div><label className="fl">Genre</label><select className="select" value={l.genre} onChange={e=>maj(i,'genre',e.target.value)}><option value="M">Masculin</option><option value="F">Féminin</option></select></div>}
+                  {(l.type||'benevole')==='benevole' && <div><label className="fl">Date d'adhésion *</label><input className="input" type="date" value={l.adhesion} onChange={e=>maj(i,'adhesion',e.target.value)}/></div>}
+                  <div style={{ gridColumn:'1/-1' }}><label className="fl">Distinction *</label>
+                    {(() => {
+                      const cur = medalTypes.find(x => x.id === l.medal);
+                      const eligCur = cur && ans !== null ? ans >= cur.years : null;
+                      return (
+                        <button type="button" onClick={()=>maj(i,'medalOpen', !l.medalOpen)}
+                          style={{ width:'100%', display:'flex', alignItems:'center', gap:10, padding:'10px 12px', borderRadius:8,
+                                   border:`1px solid ${cur ? cur.color : '#e5e7eb'}`, background:cur ? cur.light : 'white', cursor:'pointer', textAlign:'left' }}>
+                          {cur && <div style={{ width:10, height:10, borderRadius:'50%', background:cur.color, flexShrink:0 }}/>}
+                          <span style={{ flex:1, fontWeight:cur?700:400, color:cur?'#1B3764':'#94a3b8', fontSize:13 }}>
+                            {cur ? cur.label : '— Choisir la distinction —'}
+                            {cur && <span style={{ color:'#94a3b8', fontSize:12, marginLeft:6, fontWeight:400 }}>({cur.years} ans requis)</span>}
+                          </span>
+                          {eligCur === true  && <span style={{ fontSize:10, color:'#059669', fontWeight:700 }}>✓ {ans} ans</span>}
+                          {eligCur === false && <span style={{ fontSize:10, color:'#f59e0b', fontWeight:700 }}>⚡ Faits exceptionnels requis</span>}
+                          <span style={{ color:'#94a3b8', fontSize:12 }}>{l.medalOpen ? '▲' : '▼'}</span>
+                        </button>
+                      );
+                    })()}
+                    {l.medalOpen && <div style={{ display:'flex', flexDirection:'column', gap:6, marginTop:6 }}>
+                      {medalTypes.map(x => {
+                        const elig = ans !== null ? ans >= x.years : null;
+                        const sel = l.medal === x.id;
+                        return (
+                          <label key={x.id} style={{ display:'flex', alignItems:'center', gap:10, padding:'9px 12px', borderRadius:8, border:`1px solid ${sel?x.color:elig===false?'#fbbf2430':'#e5e7eb'}`, background:sel?x.light:elig===false?'#fffbeb':'white', cursor:'pointer' }}>
+                            <input type="radio" name={`medal-${i}`} value={x.id} checked={sel} onChange={()=>setMultiLignes(p=>p.map((y,k)=>k===i?{...y, medal:x.id, medalOpen:false}:y))} style={{ width:15, height:15 }}/>
+                            <div style={{ width:10, height:10, borderRadius:'50%', background:x.color, flexShrink:0 }}/>
+                            <div style={{ flex:1 }}>
+                              <span style={{ fontWeight:700, color:'#1B3764', fontSize:13 }}>{x.label}</span>
+                              {x.payant && <span style={{ marginLeft:8, background:'#fbbf24', color:'#78350f', borderRadius:10, padding:'0 6px', fontSize:10, fontWeight:700 }}>{tarif}€</span>}
+                              <span style={{ color:'#94a3b8', fontSize:12, marginLeft:6 }}>({x.years} ans requis)</span>
+                            </div>
+                            {elig === true  && <span style={{ fontSize:10, color:'#059669', fontWeight:700, flexShrink:0 }}>✓ {ans} ans</span>}
+                            {elig === false && <span style={{ fontSize:10, color:'#f59e0b', fontWeight:700, flexShrink:0 }}>⚡ Faits exceptionnels requis</span>}
+                          </label>
+                        );
+                      })}
+                    </div>}</div>
                   <div style={{ gridColumn:'1/-1' }}><label className="fl">Fonctions / compétences</label><input className="input" value={l.fonctions} onChange={e=>maj(i,'fonctions',e.target.value)} placeholder="Formateur PSC1…"/></div>
                   <div style={{ gridColumn:'1/-1' }}><label className="fl">Distinctions déjà obtenues</label><input className="input" value={l.distinctions} onChange={e=>maj(i,'distinctions',e.target.value)} placeholder="Bronze 2018…"/></div>
                   <div style={{ gridColumn:'1/-1' }}><label className="fl">Motivations * <span style={{ color:'#94a3b8', fontWeight:400, fontSize:11 }}>(50 caractères minimum)</span></label>
@@ -2045,8 +2125,14 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
             );
           })}
 
+          {multiDraftAt && <div style={{ background:'#eff6ff', border:'1px solid #bfdbfe', borderRadius:8, padding:'8px 12px', marginBottom:10, fontSize:12, color:'#1e40af' }}>
+            💾 Brouillon enregistré le {new Date(multiDraftAt).toLocaleString('fr-FR')}
+          </div>}
           <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginTop:8 }}>
             <button className="btn btn-outline" onClick={()=>setMultiLignes(p=>[...p, ligneVide()])}>+ Ajouter un récipiendaire</button>
+            <button className="btn btn-outline btn-sm" onClick={autosaveMulti}>💾 Enregistrer le brouillon</button>
+            <button className="btn btn-outline btn-sm" onClick={restoreMulti}>↺ Restaurer</button>
+            {multiDraftAt && <button className="btn btn-outline btn-sm" onClick={()=>confirm('Effacer le brouillon', 'Confirmer la suppression du brouillon en cours ?', effacerMulti)}>🗑 Effacer</button>}
             <button className="btn btn-orange" style={{ marginLeft:'auto' }} onClick={createBatch} disabled={!dept}>✓ Créer les demandes ({multiLignes.filter(l=>l.nom.trim()||l.prenom.trim()).length})</button>
           </div>
         </div>
