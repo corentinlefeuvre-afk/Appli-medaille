@@ -28,11 +28,15 @@
   .warn{background:#fffbeb;border:1px solid #fbbf24;border-radius:8px;padding:10px 13px;font-size:13px;color:#92400e;margin-top:8px}
   .err{background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:10px 13px;font-size:13px;color:#dc2626;margin-bottom:12px}
   .ok{background:#ecfdf5;border:1px solid #6ee7b7;border-radius:8px;padding:12px 14px;font-size:14px;color:#047857;margin-bottom:12px}
-  table#grid{width:100%;border-collapse:collapse;font-size:13px}
-  table#grid th{background:#f8faff;color:#1B3764;font-size:11px;text-transform:uppercase;letter-spacing:.4px;text-align:left;padding:8px 6px;border-bottom:2px solid #e5e7eb;white-space:nowrap}
-  table#grid td{padding:5px 4px;border-bottom:1px solid #f1f5f9;vertical-align:top}
-  table#grid input,table#grid select,table#grid textarea{padding:7px 8px;font-size:13px}
-  table#grid textarea{min-height:38px;resize:vertical}
+  .bloc{border:1px solid #e5e7eb;border-radius:10px;padding:14px 16px;margin-bottom:12px;background:#fbfcfe}
+  .bloc-tete{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+  .bloc-num{font-size:12px;font-weight:bold;color:#1B3764;text-transform:uppercase;letter-spacing:.6px}
+  .grille{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}
+  .grille label{font-size:11px;margin-bottom:3px}
+  .grille .plein{grid-column:1/-1}
+  .grille .large{grid-column:span 2}
+  .bloc input,.bloc select,.bloc textarea{padding:8px 10px;font-size:13px;background:#fff}
+  .bloc textarea{min-height:56px;resize:vertical}
   .del{background:none;border:none;color:#dc2626;font-size:16px;font-weight:bold;cursor:pointer;padding:6px}
   .late{background:#fffbeb !important;border-color:#fbbf24 !important}
   #recap{white-space:pre-wrap;font-family:monospace;font-size:12px;background:#f8faff;border:1px solid #e5e7eb;border-radius:8px;padding:14px;max-height:300px;overflow:auto}
@@ -50,8 +54,13 @@
 <main>
   <div class="card">
     <div class="st">1. Identification du demandeur</div>
+    <p style="font-size:12px;color:#94a3b8;margin:0 0 14px">Les champs suivis d'un <strong style="color:#E87722">*</strong> sont obligatoires.</p>
     <div class="fg"><label>Votre e-mail *</label><input type="email" id="email" placeholder="prenom.nom@protection-civile.org"></div>
-    <div class="fg"><label>Nom du demandeur *</label><input id="demandeur" placeholder="Qui remplit cette demande"></div>
+    <div class="row">
+      <div class="fg"><label>Nom du demandeur *</label><input id="demandeurNom" placeholder="MARTIN"></div>
+      <div class="fg"><label>Prénom du demandeur *</label><input id="demandeurPrenom" placeholder="Paul"></div>
+    </div>
+    <div class="fg"><label>Fonction du demandeur *</label><input id="demandeurFonction" placeholder="Président d'antenne, responsable formation…"></div>
     <div class="row">
       <div class="fg"><label>Département de rattachement *</label><select id="dept"></select></div>
       <div class="fg"><label>Antenne <span class="hint">(si applicable)</span></label><input id="antenne" placeholder="Ex : Antenne Paris 12eme"></div>
@@ -60,32 +69,19 @@
 
   <div class="card">
     <div class="st">2. Récipiendaires et distinctions</div>
-    <p style="font-size:13px;color:#64748b;margin:0 0 12px">Une ligne par personne. Vous pouvez saisir plusieurs récipiendaires d'un coup, ou coller directement depuis Excel.</p>
+    <p style="font-size:13px;color:#64748b;margin:0 0 12px">Un bloc par personne. Vous pouvez saisir plusieurs récipiendaires d'un coup, ou les coller depuis le modèle Excel fourni.</p>
+    <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:8px 12px;margin-bottom:12px;font-size:12px;color:#065f46">ℹ️ Toutes les distinctions sont sélectionnables. Si le délai d'ancienneté n'est pas atteint, la distinction peut être accordée pour <strong>faits exceptionnels</strong> — les motivations devront être explicitement détaillées.</div>
 
-    <div style="overflow-x:auto">
-      <table id="grid">
-        <thead><tr>
-          <th style="min-width:130px">Nom *</th>
-          <th style="min-width:120px">Prénom *</th>
-          <th style="min-width:90px">Genre</th>
-          <th style="min-width:95px">Année adh. *</th>
-          <th style="min-width:150px">Distinction *</th>
-          <th style="min-width:150px">Fonctions</th>
-          <th style="min-width:150px">Distinctions obtenues</th>
-          <th style="min-width:230px">Motivations *</th>
-          <th style="width:34px"></th>
-        </tr></thead>
-        <tbody id="rows"></tbody>
-      </table>
-    </div>
+    <div id="rows"></div>
 
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px">
-      <button type="button" class="btn btn-outline" id="btnAdd">+ Ajouter une ligne</button>
-      <button type="button" class="btn btn-outline" id="btnPaste">📋 Coller depuis Excel</button>
+      <button type="button" class="btn btn-outline" id="btnAdd">+ Ajouter un récipiendaire</button>
+      <button type="button" class="btn btn-outline" id="btnPaste" title="Uniquement depuis le modèle Excel fourni">📋 Coller depuis Excel</button>
+      <a class="btn btn-outline" href="/modele-demandes-distinction.xlsx" download style="text-decoration:none;display:inline-block">⬇️ Modèle Excel</a>
     </div>
 
     <div id="pasteBox" style="display:none;margin-top:12px">
-      <label>Collez vos lignes Excel ci-dessous <span class="hint">(colonnes dans l'ordre : Nom, Prénom, Genre, Année, Distinction, Fonctions, Distinctions obtenues, Motivations)</span></label>
+      <div class="warn" style="margin:0 0 10px">⚠️ Le copier-coller ne fonctionne qu'à partir du <strong>modèle Excel fourni</strong> (bouton « ⬇️ Modèle Excel »). Copiez uniquement vos lignes de données, <strong>sans les en-têtes</strong>.</div><label>Collez vos lignes ci-dessous <span class="hint">(colonnes dans l'ordre : Nom, Prénom, Genre, Année, Distinction, Fonctions, Distinctions obtenues, Motivations)</span></label>
       <textarea id="pasteData" rows="5" placeholder="DUPONT&#9;Marie&#9;F&#9;2015&#9;bronze&#9;Formatrice&#9;&#9;Engagement remarquable…"></textarea>
       <div style="display:flex;gap:10px;margin-top:8px">
         <button type="button" class="btn btn-orange" id="btnPasteOk">Importer les lignes</button>
@@ -96,6 +92,18 @@
 
     <div class="fg" style="margin-top:18px"><label>Agrafe</label><input value="Feux de Forêt" readonly style="background:#f8faff;color:#64748b;max-width:320px"><div class="hint" style="margin-top:4px">Toutes les demandes de ce formulaire portent sur l'agrafe Feux de Forêt.</div></div>
     <div class="fg"><label>Commentaire complémentaire <span class="hint">(commun à toutes les lignes)</span></label><textarea id="commentaire" rows="2" placeholder="Précisions éventuelles"></textarea></div>
+  </div>
+
+  <div class="card">
+    <div class="st">3. Adresse de livraison souhaitée</div>
+    <p style="font-size:13px;color:#64748b;margin:0 0 12px">Adresse à laquelle les diplômes seront expédiés. Laissez vide pour utiliser l'adresse enregistrée de l'APC.</p>
+    <div class="fg"><label>Nom / structure destinataire</label><input id="livNom" placeholder="APC du Rhône — à l'attention de…"></div>
+    <div class="fg"><label>Adresse</label><input id="livAdresse" placeholder="N° et nom de la rue"></div>
+    <div class="fg"><label>Complément d'adresse</label><input id="livInfos" placeholder="Bâtiment, étage, code d'accès…"></div>
+    <div class="row">
+      <div class="fg"><label>Code postal</label><input id="livCp" inputmode="numeric" maxlength="5" placeholder="69000"></div>
+      <div class="fg"><label>Ville</label><input id="livVille" placeholder="Lyon"></div>
+    </div>
   </div>
 
   <div class="card">
@@ -126,33 +134,43 @@ const $ = id => document.getElementById(id);
 const today = () => new Date().toISOString().split('T')[0];
 
 $('dept').innerHTML = '<option value="">— Choisir —</option>' + DEPTS.map(function(d){ return '<option value="'+d[0]+'">'+d[1]+'</option>'; }).join('');
-$('medal').innerHTML = '<option value="">— Choisir —</option>' + MEDALS.map(m=>'<option value="'+m.id+'">'+m.label+' ('+m.years+' ans)</option>').join('');
 
 // ── Lignes du tableau ──
-const COLS = ['nom','prenom','genre','annee','medal','fonctions','distinctions','just'];
+const COLS = ['nom','prenom','genre','adhesion','medal','fonctions','distinctions','just'];
 let seq = 0;
 
-function optionsMedals(sel){ return '<option value="">—</option>' + MEDALS.map(function(m){ return '<option value="'+m.id+'"'+(m.id===sel?' selected':'')+'>'+m.shortLabel+' ('+m.years+' ans)</option>'; }).join(''); }
+const LIBELLES = {"temoignage": "Témoignage de reconnaissance (2 ans de bénévolat)", "bronze": "Médaille de Bronze (5 ans de bénévolat)", "argent": "Médaille d'Argent (10 ans de bénévolat)", "vermeil": "Médaille de Vermeil (15 ans de bénévolat)", "grand_or": "Médaille Grand Or (20 ans de bénévolat)", "gm_argent": "Grande Médaille d'Argent (30 ans de bénévolat)", "gm_or": "Grande Médaille d'Or (40 ans de bénévolat)"};
+function libelle(m){ return LIBELLES[m.id] || m.label; }
+function optionsMedals(sel){ return '<option value="">— Choisir la distinction —</option>' + MEDALS.map(function(m){ return '<option value="'+m.id+'"'+(m.id===sel?' selected':'')+'>'+libelle(m)+'</option>'; }).join(''); }
 
 function ajouterLigne(v){
   v = v || {};
-  const id = 'r' + (++seq);
-  const tr = document.createElement('tr');
-  tr.dataset.id = id;
-  tr.innerHTML =
-    '<td><input data-c="nom" placeholder="DUPONT" value="'+(v.nom||'')+'"></td>' +
-    '<td><input data-c="prenom" placeholder="Marie" value="'+(v.prenom||'')+'"></td>' +
-    '<td><select data-c="genre"><option value="M"'+(v.genre==='F'?'':' selected')+'>M</option><option value="F"'+(v.genre==='F'?' selected':'')+'>F</option></select></td>' +
-    '<td><input data-c="annee" type="number" min="1950" max="2100" placeholder="2015" value="'+(v.annee||'')+'"></td>' +
-    '<td><select data-c="medal">'+optionsMedals(v.medal)+'</select></td>' +
-    '<td><input data-c="fonctions" placeholder="Formateur PSC1…" value="'+(v.fonctions||'')+'"></td>' +
-    '<td><input data-c="distinctions" placeholder="Bronze 2018…" value="'+(v.distinctions||'')+'"></td>' +
-    '<td><textarea data-c="just" placeholder="Actions menées, engagement…">'+(v.just||'')+'</textarea></td>' +
-    '<td><button type="button" class="del" title="Supprimer la ligne">✕</button></td>';
-  $('rows').appendChild(tr);
-  tr.querySelector('.del').addEventListener('click', function(){ tr.remove(); if(!$('rows').children.length) ajouterLigne(); majRecap(); });
-  tr.querySelectorAll('input,select,textarea').forEach(function(el){ el.addEventListener('input', majRecap); });
-  return tr;
+  const div = document.createElement('div');
+  div.className = 'bloc';
+  div.innerHTML =
+    '<div class="bloc-tete"><span class="bloc-num">Récipiendaire</span>' +
+      '<button type="button" class="del" title="Supprimer ce récipiendaire">✕</button></div>' +
+    '<div class="grille">' +
+      '<div><label>Nom *</label><input data-c="nom" placeholder="DUPONT" value="'+(v.nom||'')+'"></div>' +
+      '<div><label>Prénom *</label><input data-c="prenom" placeholder="Marie" value="'+(v.prenom||'')+'"></div>' +
+      '<div><label>Genre</label><select data-c="genre"><option value="M"'+(v.genre==='F'?'':' selected')+'>Masculin</option><option value="F"'+(v.genre==='F'?' selected':'')+'>Féminin</option></select></div>' +
+      '<div><label>Date d\'adhésion *</label><input data-c="adhesion" type="date" min="1950-01-01" value="'+(v.adhesion||'')+'"></div>' +
+      '<div class="large"><label>Distinction *</label><select data-c="medal">'+optionsMedals(v.medal)+'</select></div>' +
+      '<div class="plein"><label>Fonctions / compétences</label><input data-c="fonctions" placeholder="Formateur PSC1…" value="'+(v.fonctions||'')+'"></div>' +
+      '<div class="plein"><label>Distinctions déjà obtenues</label><input data-c="distinctions" placeholder="Bronze 2018…" value="'+(v.distinctions||'')+'"></div>' +
+      '<div class="plein"><label>Motivations *</label><textarea data-c="just" placeholder="Actions menées, engagement, faits marquants…">'+(v.just||'')+'</textarea><div class="delai hint" style="margin-top:4px"></div></div>' +
+    '</div>';
+  $('rows').appendChild(div);
+  div.querySelector('.del').addEventListener('click', function(){ div.remove(); if(!$('rows').children.length) ajouterLigne(); numeroter(); majRecap(); });
+  div.querySelectorAll('input,select,textarea').forEach(function(el){ el.addEventListener('input', majRecap); });
+  numeroter();
+  return div;
+}
+
+function numeroter(){
+  Array.prototype.forEach.call($('rows').children, function(d, i){
+    d.querySelector('.bloc-num').textContent = 'Récipiendaire ' + (i+1);
+  });
 }
 
 function lireLigne(tr){
@@ -163,26 +181,44 @@ function lireLigne(tr){
 function lignes(){ return Array.prototype.map.call($('rows').children, lireLigne); }
 function ligneVide(l){ return COLS.every(function(c){ return c==='genre' ? true : !l[c]; }); }
 
-function ancienneteDe(l){ const a = parseInt(l.annee,10); return a ? (new Date().getFullYear() - a) : null; }
+function ancienneteDe(l){
+  if (!l.adhesion) return null;
+  const d = new Date(l.adhesion);
+  if (isNaN(d)) return null;
+  const now = new Date();
+  let ans = now.getFullYear() - d.getFullYear();
+  const m = now.getMonth() - d.getMonth();
+  if (m < 0 || (m === 0 && now.getDate() < d.getDate())) ans--;   // anniversaire non atteint
+  return ans;
+}
 
 // Signale visuellement les délais non atteints
 function majDelai(){
   lignes().forEach(function(l){
     const m = MEDALS.find(function(x){ return x.id === l.medal; });
     const ans = ancienneteDe(l);
-    const champ = l._tr.querySelector('[data-c="annee"]');
-    const retard = m && ans !== null && ans < m.years;
-    champ.classList.toggle('late', !!retard);
-    champ.title = retard ? 'Délai non atteint : ' + ans + ' an(s) pour ' + m.years + ' ans requis — détaillez les motivations.' : '';
+    const champ = l._tr.querySelector('[data-c="adhesion"]');
+    const zone  = l._tr.querySelector('.delai');
+    if (!zone) return;
+    if (!m || ans === null) { zone.innerHTML = ''; champ.classList.remove('late'); return; }
+    const eligible = ans >= m.years;
+    champ.classList.toggle('late', !eligible);
+    zone.innerHTML = eligible
+      ? '<span style="color:#059669;font-weight:bold">✓ ' + ans + ' ans d\'ancienneté — délai respecté (' + m.years + ' ans requis).</span>'
+      : '<span style="display:block;background:#fffbeb;border:1px solid #fbbf24;border-radius:8px;padding:9px 12px;font-size:13px;color:#92400e">⚡ <strong>Délai non atteint :</strong> Cette distinction sera accordée uniquement pour faits exceptionnels. Veillez à détailler précisément les faits dans le champ Motivations. <em>(' + ans + ' an(s) pour ' + m.years + ' ans requis)</em></span>';
   });
 }
 
 function donneesCommunes(){
+  const liv = [$('livNom').value.trim(), $('livAdresse').value.trim(), $('livInfos').value.trim(),
+               ($('livCp').value.trim() + ' ' + $('livVille').value.trim()).trim()].filter(Boolean).join(', ');
   return {
     'E-mail demandeur': $('email').value.trim(),
-    'Demandeur': $('demandeur').value.trim(),
+    'Demandeur': ($('demandeurPrenom').value.trim() + ' ' + $('demandeurNom').value.trim()).trim(),
+    'Fonction': $('demandeurFonction').value.trim(),
     'Département (APC)': $('dept').value,
     'Antenne': $('antenne').value.trim(),
+    'Adresse de livraison': liv,
     'Agrafe': AGRAFE,
     'Commentaire': $('commentaire').value.trim(),
   };
@@ -197,7 +233,7 @@ function majRecap(){
     const m = MEDALS.find(function(x){ return x.id === l.medal; });
     const ans = ancienneteDe(l);
     return '\n— Ligne ' + (i+1) + ' : ' + [l.prenom, l.nom].filter(Boolean).join(' ') +
-           (m ? ' | ' + m.label : '') +
+           (m ? ' | ' + libelle(m) : '') +
            (ans !== null ? ' | ' + ans + ' an(s)' : '') +
            (l.just ? '\n   Motivations : ' + l.just : '');
   }).join('\n');
@@ -207,21 +243,68 @@ function majRecap(){
 
 function manquants(){
   const m = [];
-  if (!$('email').value.trim())     m.push('votre e-mail');
-  if (!$('demandeur').value.trim()) m.push('nom du demandeur');
-  if (!$('dept').value)             m.push('département de rattachement');
+  const email = $('email').value.trim();
+  const nomD  = $('demandeurNom').value.trim();
+  const prenD = $('demandeurPrenom').value.trim();
+  const foncD = $('demandeurFonction').value.trim();
+  const cp    = $('livCp').value.trim();
+
+  if (!email) m.push('votre e-mail');
+  else if (!/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(email)) m.push("format de l'e-mail invalide");
+  if (!nomD)  m.push('nom du demandeur');
+  else if (nomD.length < 2) m.push('nom du demandeur trop court');
+  if (!prenD) m.push('prénom du demandeur');
+  else if (prenD.length < 2) m.push('prénom du demandeur trop court');
+  if (!foncD) m.push('fonction du demandeur');
+  if (!$('dept').value) m.push('département de rattachement');
+  if (cp && !/^\d{5}$/.test(cp)) m.push('code postal de livraison (5 chiffres)');
+  if ($('livAdresse').value.trim() && !$('livVille').value.trim()) m.push('ville de livraison');
+
   const utiles = lignes().filter(function(l){ return !ligneVide(l); });
   if (!utiles.length) { m.push('au moins un récipiendaire'); return m; }
+  if (utiles.length > 50) m.push('50 récipiendaires maximum par envoi');
+
+  const auj = new Date(); auj.setHours(0,0,0,0);
   utiles.forEach(function(l, i){
     const manque = [];
-    if (!l.nom)    manque.push('nom');
+    if (!l.nom) manque.push('nom');
+    else if (l.nom.length < 2) manque.push('nom trop court');
     if (!l.prenom) manque.push('prénom');
-    if (!l.annee)  manque.push("année d'adhésion");
-    if (!l.medal)  manque.push('distinction');
-    if (!l.just)   manque.push('motivations');
-    if (manque.length) m.push('ligne ' + (i+1) + ' (' + manque.join(', ') + ')');
+    else if (l.prenom.length < 2) manque.push('prénom trop court');
+    if (!l.adhesion) manque.push("date d'adhésion");
+    else {
+      const d = new Date(l.adhesion);
+      if (isNaN(d)) manque.push("date d'adhésion invalide");
+      else if (d > auj) manque.push("date d'adhésion dans le futur");
+      else if (d.getFullYear() < 1950) manque.push("date d'adhésion antérieure à 1950");
+    }
+    if (!l.medal) manque.push('distinction');
+    if (!l.just) manque.push('motivations');
+    else if (l.just.length < 20) manque.push('motivations trop brèves (20 caractères minimum)');
+    if (manque.length) m.push('récipiendaire ' + (i+1) + ' : ' + manque.join(', '));
+  });
+
+  // doublons éventuels dans la saisie
+  const vus = {};
+  utiles.forEach(function(l, i){
+    const cle = (l.prenom + '|' + l.nom + '|' + l.medal).toLowerCase();
+    if (l.nom && l.prenom && l.medal) {
+      if (vus[cle]) m.push('récipiendaires ' + vus[cle] + ' et ' + (i+1) + ' : même personne et même distinction');
+      else vus[cle] = i+1;
+    }
   });
   return m;
+}
+
+// Convertit une date Excel (JJ/MM/AAAA, AAAA-MM-JJ…) au format attendu
+function normaliserDate(v){
+  if (!v) return '';
+  let m = v.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/);
+  if (m) return m[3] + '-' + m[2].padStart(2,'0') + '-' + m[1].padStart(2,'0');
+  m = v.match(/^(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})$/);
+  if (m) return m[1] + '-' + m[2].padStart(2,'0') + '-' + m[3].padStart(2,'0');
+  if (/^\d{4}$/.test(v)) return v + '-01-01';   // année seule
+  return '';
 }
 
 // ── Collage depuis Excel ──
@@ -235,12 +318,20 @@ $('btnPasteOk').addEventListener('click', function(){
   brut.split(/\r?\n/).forEach(function(ligne){
     if (!ligne.trim()) return;
     const c = ligne.split('\t');
+    const t0 = (c[0]||'').trim().toLowerCase();
+    if (t0 === 'nom' || t0 === 'nom *' || t0.startsWith('modèle de saisie') || t0.startsWith('une ligne par')) return;
     const medalBrut = (c[4]||'').trim().toLowerCase();
-    const m = MEDALS.find(function(x){ return x.id === medalBrut || x.label.toLowerCase() === medalBrut || x.shortLabel.toLowerCase() === medalBrut; });
+    const norm = function(t){ return t.toLowerCase().replace(/[’']/g,"'").replace(/\s+/g,' ').trim(); };
+    const mb = norm(medalBrut);
+    const m = MEDALS.find(function(x){
+      return x.id === mb || norm(x.label) === mb || norm(x.shortLabel) === mb ||
+             norm(LIBELLES[x.id] || '') === mb ||
+             norm((LIBELLES[x.id] || '').replace(/\s*\(.*\)$/, '')) === mb;
+    });
     ajouterLigne({
       nom:(c[0]||'').trim(), prenom:(c[1]||'').trim(),
       genre:((c[2]||'').trim().toUpperCase().charAt(0) === 'F') ? 'F' : 'M',
-      annee:(c[3]||'').trim(), medal: m ? m.id : '',
+      adhesion: normaliserDate((c[3]||'').trim()), medal: m ? m.id : '',
       fonctions:(c[5]||'').trim(), distinctions:(c[6]||'').trim(), just:(c[7]||'').trim(),
     });
     n++;
@@ -249,6 +340,7 @@ $('btnPasteOk').addEventListener('click', function(){
   Array.prototype.slice.call($('rows').children).forEach(function(tr){
     if (ligneVide(lireLigne(tr)) && $('rows').children.length > 1) tr.remove();
   });
+  numeroter();
   $('pasteBox').style.display = 'none'; $('pasteData').value = '';
   $('msg').innerHTML = '<div class="ok">' + n + ' ligne(s) importée(s) — vérifiez les distinctions et complétez si nécessaire.</div>';
   majRecap();
@@ -269,12 +361,16 @@ $('btnSend').addEventListener('click', async function () {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         email: $('email').value.trim(),
-        demandeur: $('demandeur').value.trim(),
+        demandeurNom: $('demandeurNom').value.trim(),
+        demandeurPrenom: $('demandeurPrenom').value.trim(),
+        demandeurFonction: $('demandeurFonction').value.trim(),
         dept: $('dept').value,
         antenne: $('antenne').value.trim(),
         commentaire: $('commentaire').value.trim(),
+        livraison: { nom:$('livNom').value.trim(), adresse:$('livAdresse').value.trim(),
+                     infos:$('livInfos').value.trim(), cp:$('livCp').value.trim(), ville:$('livVille').value.trim() },
         lignes: utiles.map(function(l){
-          return { nom:l.nom, prenom:l.prenom, genre:l.genre, annee:l.annee,
+          return { nom:l.nom, prenom:l.prenom, genre:l.genre, adhesion:l.adhesion,
                    medal:l.medal, fonctions:l.fonctions, distinctions:l.distinctions, just:l.just };
         }),
       }),
@@ -304,7 +400,7 @@ $('btnSend').addEventListener('click', async function () {
 });
 
 ajouterLigne();
-['email','demandeur','dept','antenne','commentaire'].forEach(function(id){ $(id).addEventListener('input', majRecap); });
+['email','demandeurNom','demandeurPrenom','demandeurFonction','dept','antenne','commentaire','livNom','livAdresse','livInfos','livCp','livVille'].forEach(function(id){ $(id).addEventListener('input', majRecap); });
 majRecap();
 </script>
 </body>

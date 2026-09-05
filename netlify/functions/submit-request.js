@@ -21,6 +21,17 @@ const MEDALS = {
 const AGRAFE = 'Feux de Forêt';
 const clean = (v, max = 300) => String(v ?? '').trim().slice(0, max);
 
+// Ancienneté en années révolues à partir de la date d'adhésion (repli : année seule)
+const anciennete = (dateStr, annee) => {
+  const d = dateStr ? new Date(dateStr) : null;
+  if (!d || isNaN(d)) return annee ? new Date().getFullYear() - annee : null;
+  const now = new Date();
+  let ans = now.getFullYear() - d.getFullYear();
+  const m = now.getMonth() - d.getMonth();
+  if (m < 0 || (m === 0 && now.getDate() < d.getDate())) ans--;
+  return ans;
+};
+
 export const handler = async (event) => {
   const CORS = { 'Access-Control-Allow-Origin':'*', 'Access-Control-Allow-Headers':'Content-Type', 'Access-Control-Allow-Methods':'POST, OPTIONS' };
   if (event.httpMethod === 'OPTIONS') return { statusCode: 204, headers: CORS, body: '' };
@@ -76,14 +87,24 @@ export const handler = async (event) => {
 
     // ── Champs communs ──
     const email     = clean(p.email, 160);
-    const demandeur = clean(p.demandeur, 120);
+    const demandeurNom      = clean(p.demandeurNom, 80);
+    const demandeurPrenom   = clean(p.demandeurPrenom, 80);
+    const demandeurFonction = clean(p.demandeurFonction, 120);
+    const demandeur = [demandeurPrenom, demandeurNom].filter(Boolean).join(' ') || clean(p.demandeur, 120);
+    const liv = p.livraison || {};
+    const livraison = {
+      nom: clean(liv.nom, 120), adresse: clean(liv.adresse, 200), infos: clean(liv.infos, 200),
+      cp: clean(liv.cp, 10), ville: clean(liv.ville, 100),
+    };
+    const livraisonTexte = [livraison.nom, livraison.adresse, livraison.infos, `${livraison.cp} ${livraison.ville}`.trim()].filter(Boolean).join(', ');
     const dept      = clean(p.dept, 120);
     const antenne   = clean(p.antenne, 120);
     const commentaireCommun = clean(p.commentaire, 2000);
 
     const errs = [];
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) errs.push('e-mail valide');
-    if (!demandeur) errs.push('nom du demandeur');
+    if (!demandeur) errs.push('nom et prénom du demandeur');
+    if (livraison.cp && !/^\d{5}$/.test(livraison.cp)) errs.push('code postal de livraison (5 chiffres)');
     if (!dept)      errs.push('département');
 
     // Compatibilité : une seule demande (ancien format) ou plusieurs lignes
@@ -96,17 +117,21 @@ export const handler = async (event) => {
     brutes.forEach((b, i) => {
       const nom    = clean(b.nom, 80);
       const prenom = clean(b.prenom, 80);
-      const annee  = parseInt(b.annee, 10);
+      const adhesion = clean(b.adhesion, 12);
+      const dAdh = adhesion ? new Date(adhesion) : null;
+      const annee = dAdh && !isNaN(dAdh) ? dAdh.getFullYear() : parseInt(b.annee, 10);
       const medal  = MEDALS[clean(b.medal, 20)];
       const just   = clean(b.just, 4000);
       const manque = [];
       if (!nom)    manque.push('nom');
       if (!prenom) manque.push('prénom');
-      if (!annee || annee < 1950 || annee > an) manque.push("année d'adhésion");
+      if (!annee || annee < 1950 || annee > an) manque.push("date d'adhésion");
+      else if (dAdh && dAdh > new Date()) manque.push("date d'adhésion dans le futur");
+      if (just && just.length < 20) manque.push('motivations trop brèves');
       if (!medal)  manque.push('distinction');
       if (!just)   manque.push('motivations');
       if (manque.length) { errs.push(`ligne ${i+1} : ${manque.join(', ')}`); return; }
-      valides.push({ nom, prenom, annee, medal, just,
+      valides.push({ nom, prenom, annee, adhesion: (dAdh && !isNaN(dAdh)) ? adhesion : '', medal, just,
         genre: b.genre === 'F' ? 'F' : 'M',
         fonctions: clean(b.fonctions, 500), distinctions: clean(b.distinctions, 500) });
     });
@@ -125,17 +150,23 @@ export const handler = async (event) => {
     const lots = valides.map((v) => {
       const id = `REQ-${an}-${String(++max).padStart(3,'0')}`;
       ids.push(id);
-      const commentaire = [commentaireCommun, `Agrafe souhaitée : ${AGRAFE}`].filter(Boolean).join(' — ');
+      const commentaire = [
+        commentaireCommun,
+        demandeurFonction ? `Fonction du demandeur : ${demandeurFonction}` : '',
+        livraisonTexte ? `Adresse de livraison souhaitée : ${livraisonTexte}` : '',
+        `Agrafe souhaitée : ${AGRAFE}`,
+      ].filter(Boolean).join(' — ');
       const demande = {
         id, diplomeId:null, statut:'en_commission',
         benevole: {
           id: `${v.prenom}-${v.nom}`.toLowerCase().replace(/\W+/g,'-'), type:'benevole',
           nom: v.nom, prenom: v.prenom, genre: v.genre, annee: v.annee,
-          antenne, dept, adhesion:'', ans: an - v.annee,
+          antenne, dept, adhesion: v.adhesion, ans: anciennete(v.adhesion, v.annee),
           fonctions: v.fonctions, distinctions: v.distinctions,
         },
         medalType: v.medal,
         demandeur, emailDemandeur: email,
+        demandeurFonction, livraison: livraisonTexte ? livraison : null,
         dept, niveau:'antenne', dateCreation: today, notifications:true,
         agrafe: v.medal.id !== 'temoignage', agrafeDepts:[],
         paiement: v.medal.payant ? 'en_attente' : null, expedition:null,

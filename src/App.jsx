@@ -12,7 +12,7 @@ export { ErrorBoundary };
 
 
 const APP_TITLE   = "Demande Médaille FNPC";
-const APP_VERSION = "1.6.28";
+const APP_VERSION = "1.7.1";
 const USE_SUPABASE = true;
 
 // ── PrestaShop Webservice ────────────────────────────────────────────────────
@@ -481,6 +481,10 @@ export default function App() {
   const [nrMode, setNrMode] = useState('registry');
   const [nrType, setNrType] = useState('benevole'); // 'benevole' | 'antenne'
   const [nrAntenneNom, setNrAntenneNom] = useState('');
+  // Saisie multiple : plusieurs récipiendaires d'un coup
+  const [multiLignes, setMultiLignes] = useState([]);
+  const [multiDept, setMultiDept] = useState('');
+  const [multiAgrafe, setMultiAgrafe] = useState('');   // agrafe commune au lot ('' = demandes classiques)
   const [nrVolSearch, setNrVolSearch] = useState('');
   const [nrVol, setNrVol]   = useState(null);
   const [nrNom, setNrNom]   = useState('');
@@ -872,6 +876,80 @@ export default function App() {
     fire('Brouillon chargé — terminez la demande ✓');
   };
 
+  // ── Création en lot (saisie multiple) ──
+  const ligneVide = () => ({ nom:'', prenom:'', genre:'M', adhesion:'', medal:'', fonctions:'', distinctions:'', just:'', recherche:'', volId:'', trouve:null });
+  const ansDepuis = (d) => {
+    if (!d) return null;
+    const dt = new Date(d); if (isNaN(dt)) return null;
+    const now = new Date();
+    let a = now.getFullYear() - dt.getFullYear();
+    const m = now.getMonth() - dt.getMonth();
+    if (m < 0 || (m === 0 && now.getDate() < dt.getDate())) a--;
+    return a;
+  };
+
+  const createBatch = () => {
+    const dept = lockedDept || multiDept;
+    if (!dept) { fire('Sélectionnez un département pour ces demandes.', 'err'); return; }
+    if (deptDisabled[dept]) { fire('Ce département est désactivé — impossible de soumettre.', 'err'); return; }
+    if (role === 'antenne' && antenneLevelOff.includes(dept)) { fire("Le niveau antenne est désactivé pour ce département.", 'err'); return; }
+
+    const utiles = multiLignes.filter(l => l.nom.trim() || l.prenom.trim() || l.medal || l.just.trim());
+    if (!utiles.length) { fire('Ajoutez au moins un récipiendaire.', 'err'); return; }
+
+    const erreurs = [];
+    utiles.forEach((l, i) => {
+      const manque = [];
+      if (!l.nom.trim())    manque.push('nom');
+      if (!l.prenom.trim()) manque.push('prénom');
+      if (!l.adhesion)      manque.push("date d'adhésion");
+      else if (new Date(l.adhesion) > new Date()) manque.push("date d'adhésion dans le futur");
+      if (!l.medal)         manque.push('distinction');
+      if (!l.just.trim())   manque.push('motivations');
+      else if (l.just.trim().length < 50) manque.push('motivations trop brèves (50 caractères minimum)');
+      if (manque.length) erreurs.push(`Récipiendaire ${i+1} : ${manque.join(', ')}`);
+    });
+    if (erreurs.length) { fire(erreurs.join(' — '), 'err'); return; }
+
+    const hasValidationRight = role === 'antenne';
+    const targetStatut = role === 'departement' ? 'pret_commission' : hasValidationRight ? 'soumis' : 'soumis_antenne';
+    const createAction = role === 'departement' ? "Validé APC — en attente d'envoi en masse" : hasValidationRight ? 'Soumis APC directement' : "Soumis à validation Antenne";
+
+    const doSubmit = () => {
+      let n = requests.length;
+      const nouvelles = utiles.map(l => {
+        const medalType = medalTypes.find(m => m.id === l.medal);
+        const ans = ansDepuis(l.adhesion);
+        const isTemoig = medalType.category === 'temoignage';
+        return {
+          id:`REQ-${new Date().getFullYear()}-${String(++n).padStart(3,'0')}`,
+          diplomeId:null, statut:targetStatut,
+          benevole:{ id: l.volId || `${l.prenom}-${l.nom}`.toLowerCase().replace(/\W+/g,'-'), type:'benevole',
+            nom:l.nom.trim(), prenom:l.prenom.trim(), genre:l.genre,
+            annee:new Date(l.adhesion).getFullYear(), antenne:authUser?.antenne||'', dept,
+            adhesion:l.adhesion, ans, fonctions:l.fonctions.trim(), distinctions:l.distinctions.trim() },
+          medalType, demandeur:ROLES[role].org, emailDemandeur:authUser?.email||'', dept, niveau:role,
+          dateCreation:today(), notifications:true,
+          agrafe: !isTemoig && !!multiAgrafe, agrafeDepts: (!isTemoig && multiAgrafe) ? [multiAgrafe] : [],
+          paiement: medalType.payant ? 'en_attente' : null, expedition:null,
+          justification:l.just.trim(), dateReception:'', commentaire:'',
+          commissionVotes:[],
+          historique:[{ date:today(), action:createAction, auteur:ROLES[role].label, comment: multiAgrafe ? `Saisie multiple — agrafe : ${agrafes.find(a=>a.id===multiAgrafe)?.nom||''}` : 'Saisie multiple' }],
+        };
+      });
+      setRequests(p => [...nouvelles.slice().reverse(), ...p]);
+      setMultiLignes([ligneVide()]);
+      setMultiAgrafe('');
+      setPage('demandes');
+      fire(`${nouvelles.length} demande(s) créée(s) ✓`);
+    };
+    confirm('Avant de soumettre les demandes', `Vous allez créer ${utiles.length} demande(s). Vérifiez que les règles sont respectées (ancienneté, motivations détaillées…). Dans le cas contraire, elles pourront être refusées par le ou les niveaux supérieurs.`, doSubmit, false, { ok:'Continuer', cancel:'Modifier' });
+  };
+
+  useEffect(() => {
+    if (page === 'saisie_multiple' && multiLignes.length === 0) setMultiLignes([ligneVide()]);
+  }, [page]);
+
   const createRequest = () => {
     const vol = getEffectiveVol();
     if (!vol || !nrMedal || !nrJust.trim()) return;
@@ -1198,6 +1276,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
       case 'nouvelle':          return NouvelleDemandePage();
       case 'validation_rapide': return ValidationRapidePage();
       case 'validation_table':  return ValidationTablePage();
+      case 'saisie_multiple':   return SaisieMultiplePage();
       case 'delegues':          return DeleguesPage();
       case 'adresse':           return AdressePage();
       case 'diplomes':          return DiplomesPage();
@@ -1804,6 +1883,105 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
             <button className="btn btn-outline" onClick={()=>{ resetForm(); setPage('demandes'); }}>Annuler</button>
           </div>
         </>}
+      </div>
+    );
+  }
+
+  function SaisieMultiplePage() {
+    const maj = (i, champ, val) => setMultiLignes(p => p.map((l, k) => k === i ? { ...l, [champ]: val } : l));
+    const chercherVol = (i) => {
+      const q = (multiLignes[i]?.recherche || '').toLowerCase().trim();
+      if (!q) return;
+      const v = MOCK_VOLUNTEERS.find(x => x.nom.toLowerCase().includes(q) || x.prenom.toLowerCase().includes(q) || x.id.toLowerCase() === q);
+      setMultiLignes(p => p.map((l, k) => k !== i ? l : (v ? {
+        ...l, trouve:v, volId:v.id, nom:v.nom, prenom:v.prenom, genre:v.genre || 'M',
+        adhesion:v.adhesion || l.adhesion, fonctions:v.fonctions || l.fonctions, distinctions:v.distinctions || l.distinctions,
+      } : { ...l, trouve:false, volId:'' })));
+    };
+    const dept = lockedDept || multiDept;
+    const optsDept = role === 'gestion' ? DEPTS : myDepts;
+    return (
+      <div>
+        <h1 style={H1}>Saisie multiple</h1>
+        <p style={{ color:'#64748b', fontSize:13, marginBottom:16 }}>Créez plusieurs demandes en une fois : un bloc par récipiendaire. Les règles habituelles s'appliquent (délai d'ancienneté, motivations détaillées).</p>
+
+        <div className="card">
+          {!lockedDept && <div className="fg" style={{ maxWidth:420 }}><label className="fl">Association APC *</label>
+            <select className="select" value={multiDept} onChange={e=>setMultiDept(e.target.value)}>
+              <option value="">— Département —</option>
+              {optsDept.map(d=><option key={d} value={d}>{deptLabel(d)}</option>)}
+            </select></div>}
+          {lockedDept && <div className="fg" style={{ maxWidth:420 }}><label className="fl">Association APC</label><input className="input" value={deptLabel(lockedDept)} readOnly style={{ background:'#f8faff', color:'#64748b' }}/></div>}
+          <div style={{ background:'#f0fdf4', border:'1px solid #86efac', borderRadius:8, padding:'8px 12px', margin:'4px 0 14px', fontSize:12, color:'#065f46' }}>ℹ️ Toutes les distinctions sont sélectionnables. Si le délai d'ancienneté n'est pas atteint, la distinction peut être accordée pour <strong>faits exceptionnels</strong> — les motivations devront être explicitement détaillées.</div>
+
+          {(() => {
+            const dispo = agrafes.filter(a => a.actif && a.depts.includes(dept));
+            if (!dispo.length) return null;
+            return (
+              <div className="fg" style={{ maxWidth:520, background:'#fff8f3', border:'1px solid #fbd5b0', borderRadius:10, padding:'12px 14px' }}>
+                <label className="fl">🏅 Agrafe appliquée à toutes les demandes de cette saisie</label>
+                <select className="select" value={multiAgrafe} onChange={e=>setMultiAgrafe(e.target.value)}>
+                  <option value="">Aucune — demandes classiques</option>
+                  {dispo.map(a=><option key={a.id} value={a.id}>{a.nom}</option>)}
+                </select>
+                <div style={{ fontSize:11, color:'#94a3b8', marginTop:4 }}>
+                  {multiAgrafe
+                    ? "Tous les récipiendaires saisis ci-dessous recevront cette agrafe (sauf témoignages, qui n'en comportent pas)."
+                    : 'Sans sélection, les demandes sont créées comme des demandes classiques.'}
+                </div>
+              </div>
+            );
+          })()}
+
+          {multiLignes.map((l, i) => {
+            const m = medalTypes.find(x => x.id === l.medal);
+            const ans = ansDepuis(l.adhesion);
+            const eligible = m && ans !== null ? ans >= m.years : null;
+            return (
+              <div key={i} style={{ border:'1px solid #e5e7eb', borderRadius:10, padding:'14px 16px', marginBottom:12, background:'#fbfcfe' }}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
+                  <span style={{ fontSize:12, fontWeight:700, color:'#1B3764', textTransform:'uppercase', letterSpacing:'.6px' }}>Récipiendaire {i+1}</span>
+                  <button className="btn btn-outline btn-sm" onClick={()=>setMultiLignes(p => p.length>1 ? p.filter((_,k)=>k!==i) : [ligneVide()])}>✕</button>
+                </div>
+                <div style={{ display:'flex', gap:8, marginBottom:10 }}>
+                  <input className="input" style={{ flex:1 }} placeholder="🔍 Rechercher dans E-Protec (nom ou identifiant)…"
+                    value={l.recherche} onChange={e=>maj(i,'recherche',e.target.value)}
+                    onKeyDown={e=>{ if(e.key==='Enter'){ e.preventDefault(); chercherVol(i); } }}/>
+                  <button className="btn btn-primary btn-sm" onClick={()=>chercherVol(i)}>Rechercher</button>
+                </div>
+                {l.trouve && <div style={{ background:'#f0fdf4', border:'1px solid #86efac', borderRadius:8, padding:'8px 12px', marginBottom:10, fontSize:12, color:'#047857' }}>
+                  ✓ <strong>{l.trouve.prenom} {l.trouve.nom}</strong> — {l.trouve.antenne||l.trouve.dept} · {l.trouve.ans} ans · adhésion {l.trouve.adhesion}
+                </div>}
+                {l.trouve === false && <div style={{ background:'#fef2f2', border:'1px solid #fca5a5', borderRadius:8, padding:'8px 12px', marginBottom:10, fontSize:12, color:'#dc2626' }}>
+                  Aucun bénévole trouvé — complétez les champs manuellement.
+                </div>}
+                <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))', gap:10 }}>
+                  <div><label className="fl">Nom *</label><input className="input" value={l.nom} onChange={e=>maj(i,'nom',e.target.value)} placeholder="DUPONT"/></div>
+                  <div><label className="fl">Prénom *</label><input className="input" value={l.prenom} onChange={e=>maj(i,'prenom',e.target.value)} placeholder="Marie"/></div>
+                  <div><label className="fl">Genre</label><select className="select" value={l.genre} onChange={e=>maj(i,'genre',e.target.value)}><option value="M">Masculin</option><option value="F">Féminin</option></select></div>
+                  <div><label className="fl">Date d'adhésion *</label><input className="input" type="date" value={l.adhesion} onChange={e=>maj(i,'adhesion',e.target.value)}/></div>
+                  <div style={{ gridColumn:'span 2' }}><label className="fl">Distinction *</label>
+                    <select className="select" value={l.medal} onChange={e=>maj(i,'medal',e.target.value)}>
+                      <option value="">— Choisir la distinction —</option>
+                      {medalTypes.map(x=><option key={x.id} value={x.id}>{x.label} ({x.years} ans)</option>)}
+                    </select></div>
+                  <div style={{ gridColumn:'1/-1' }}><label className="fl">Fonctions / compétences</label><input className="input" value={l.fonctions} onChange={e=>maj(i,'fonctions',e.target.value)} placeholder="Formateur PSC1…"/></div>
+                  <div style={{ gridColumn:'1/-1' }}><label className="fl">Distinctions déjà obtenues</label><input className="input" value={l.distinctions} onChange={e=>maj(i,'distinctions',e.target.value)} placeholder="Bronze 2018…"/></div>
+                  <div style={{ gridColumn:'1/-1' }}><label className="fl">Motivations * <span style={{ color:'#94a3b8', fontWeight:400, fontSize:11 }}>(50 caractères minimum)</span></label>
+                    <textarea className="textarea" rows={3} value={l.just} onChange={e=>maj(i,'just',e.target.value)} placeholder="Actions menées, engagement, faits marquants…"/>
+                    {eligible === true && <div style={{ fontSize:12, color:'#059669', fontWeight:700, marginTop:4 }}>✓ {ans} ans d'ancienneté — délai respecté ({m.years} ans requis).</div>}
+                    {eligible === false && <div style={{ background:'#fffbeb', border:'1px solid #fbbf24', borderRadius:8, padding:'9px 12px', marginTop:6, fontSize:13, color:'#92400e' }}>⚡ <strong>Délai non atteint :</strong> Cette distinction sera accordée uniquement pour faits exceptionnels. Veillez à détailler précisément les faits dans le champ Motivations. <em>({ans} an(s) pour {m.years} ans requis)</em></div>}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+
+          <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginTop:8 }}>
+            <button className="btn btn-outline" onClick={()=>setMultiLignes(p=>[...p, ligneVide()])}>+ Ajouter un récipiendaire</button>
+            <button className="btn btn-orange" style={{ marginLeft:'auto' }} onClick={createBatch} disabled={!dept}>✓ Créer les demandes ({multiLignes.filter(l=>l.nom.trim()||l.prenom.trim()).length})</button>
+          </div>
+        </div>
       </div>
     );
   }
@@ -3322,6 +3500,7 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
     { id:'demandes', icon:'📋', label:'Demandes', badge:role==='departement'?stats.toValDept:role==='antenne'?stats.toValAntenne:role==='commission'?stats.toValComm:null },
     ...(role==='departement'&&stats.tdrEnAttentePaiement>0?[{ id:'tdr_paiement', icon:'💳', label:'TDR à payer', badge:stats.tdrEnAttentePaiement }]:[]),
     ...(canCreate?[{ id:'nouvelle', icon:'✚', label:'Nouvelle demande' }]:[]),
+    ...(canCreate?[{ id:'saisie_multiple', icon:'📋', label:'Saisie multiple' }]:[]),
     ...(role==='commission'?[{ id:'validation_table', icon:'☑️', label:'Validation (tableau)', badge:stats.toValComm||null }]:[]),
     ...(['antenne','departement','gestion'].includes(role)?[{ id:'statistiques', icon:'📈', label:'Statistiques' }]:[]),
     ...(role==='commission'?[{ id:'validation_rapide', icon:'⚡', label:'Validation rapide', badge:requests.filter(r=>r.statut==='en_commission'&&r.benevole.ans>=r.medalType.years).length||null }]:[]),
