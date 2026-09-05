@@ -12,7 +12,7 @@ export { ErrorBoundary };
 
 
 const APP_TITLE   = "Demande Médaille FNPC";
-const APP_VERSION = "1.7.1";
+const APP_VERSION = "1.7.2";
 const USE_SUPABASE = true;
 
 // ── PrestaShop Webservice ────────────────────────────────────────────────────
@@ -485,6 +485,13 @@ export default function App() {
   const [multiLignes, setMultiLignes] = useState([]);
   const [multiDept, setMultiDept] = useState('');
   const [multiAgrafe, setMultiAgrafe] = useState('');   // agrafe commune au lot ('' = demandes classiques)
+  const [multiEmail, setMultiEmail] = useState('');
+  const [multiDemandeur, setMultiDemandeur] = useState('');
+  const [multiDateRecep, setMultiDateRecep] = useState('');
+  const [multiCommentaire, setMultiCommentaire] = useState('');
+  const [multiNotif, setMultiNotif] = useState(true);
+  const [multiPaste, setMultiPaste] = useState('');
+  const [multiPasteOpen, setMultiPasteOpen] = useState(false);
   const [nrVolSearch, setNrVolSearch] = useState('');
   const [nrVol, setNrVol]   = useState(null);
   const [nrNom, setNrNom]   = useState('');
@@ -928,18 +935,18 @@ export default function App() {
             nom:l.nom.trim(), prenom:l.prenom.trim(), genre:l.genre,
             annee:new Date(l.adhesion).getFullYear(), antenne:authUser?.antenne||'', dept,
             adhesion:l.adhesion, ans, fonctions:l.fonctions.trim(), distinctions:l.distinctions.trim() },
-          medalType, demandeur:ROLES[role].org, emailDemandeur:authUser?.email||'', dept, niveau:role,
-          dateCreation:today(), notifications:true,
+          medalType, demandeur: multiDemandeur.trim() || ROLES[role].org, emailDemandeur: multiEmail.trim() || authUser?.email || '', dept, niveau:role,
+          dateCreation:today(), notifications:multiNotif,
           agrafe: !isTemoig && !!multiAgrafe, agrafeDepts: (!isTemoig && multiAgrafe) ? [multiAgrafe] : [],
           paiement: medalType.payant ? 'en_attente' : null, expedition:null,
-          justification:l.just.trim(), dateReception:'', commentaire:'',
+          justification:l.just.trim(), dateReception:multiDateRecep, commentaire:multiCommentaire.trim(),
           commissionVotes:[],
           historique:[{ date:today(), action:createAction, auteur:ROLES[role].label, comment: multiAgrafe ? `Saisie multiple — agrafe : ${agrafes.find(a=>a.id===multiAgrafe)?.nom||''}` : 'Saisie multiple' }],
         };
       });
       setRequests(p => [...nouvelles.slice().reverse(), ...p]);
       setMultiLignes([ligneVide()]);
-      setMultiAgrafe('');
+      setMultiAgrafe(''); setMultiCommentaire(''); setMultiDateRecep('');
       setPage('demandes');
       fire(`${nouvelles.length} demande(s) créée(s) ✓`);
     };
@@ -1889,6 +1896,42 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
 
   function SaisieMultiplePage() {
     const maj = (i, champ, val) => setMultiLignes(p => p.map((l, k) => k === i ? { ...l, [champ]: val } : l));
+    const normDate = (v) => {
+      if (!v) return '';
+      let m = v.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/);
+      if (m) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
+      m = v.match(/^(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})$/);
+      if (m) return `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`;
+      if (/^\d{4}$/.test(v)) return `${v}-01-01`;
+      return '';
+    };
+    const importerColle = () => {
+      const brut = multiPaste.trim();
+      if (!brut) return;
+      const norm = (t) => t.toLowerCase().replace(/[’']/g, "'").replace(/\s+/g, ' ').trim();
+      const ajout = [];
+      brut.split(/\r?\n/).forEach(ligne => {
+        if (!ligne.trim()) return;
+        const c = ligne.split('\t');
+        const t0 = (c[0]||'').trim().toLowerCase();
+        if (t0 === 'nom' || t0.startsWith('modèle de saisie') || t0.startsWith('une ligne par')) return;
+        const mb = norm(c[4]||'');
+        const m = medalTypes.find(x => x.id === mb || norm(x.label) === mb || norm(x.shortLabel) === mb
+          || norm(x.label.replace(/Échelon /,'')) === mb || norm(x.label).replace(/\s*\(.*\)$/,'') === mb.replace(/\s*\(.*\)$/,''));
+        ajout.push({ ...ligneVide(),
+          nom:(c[0]||'').trim(), prenom:(c[1]||'').trim(),
+          genre:((c[2]||'').trim().toUpperCase().charAt(0)==='F') ? 'F' : 'M',
+          adhesion: normDate((c[3]||'').trim()), medal: m ? m.id : '',
+          fonctions:(c[5]||'').trim(), distinctions:(c[6]||'').trim(), just:(c[7]||'').trim() });
+      });
+      if (!ajout.length) { fire('Aucune ligne exploitable dans le collage.', 'err'); return; }
+      setMultiLignes(p => {
+        const utiles = p.filter(l => l.nom.trim() || l.prenom.trim() || l.medal || l.just.trim());
+        return [...utiles, ...ajout];
+      });
+      setMultiPaste(''); setMultiPasteOpen(false);
+      fire(`${ajout.length} ligne(s) importée(s) — vérifiez les distinctions.`);
+    };
     const chercherVol = (i) => {
       const q = (multiLignes[i]?.recherche || '').toLowerCase().trim();
       if (!q) return;
@@ -1932,6 +1975,31 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
               </div>
             );
           })()}
+
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))', gap:12, marginTop:14 }}>
+            <div><label className="fl">E-mail du demandeur</label><input className="input" type="email" value={multiEmail} onChange={e=>setMultiEmail(e.target.value)} placeholder={authUser?.email||'prenom.nom@protection-civile.org'}/></div>
+            <div><label className="fl">Nom du demandeur</label><input className="input" value={multiDemandeur} onChange={e=>setMultiDemandeur(e.target.value)} placeholder={ROLES[role].org}/></div>
+            <div><label className="fl">Date de remise souhaitée</label><input className="input" type="date" value={multiDateRecep} onChange={e=>setMultiDateRecep(e.target.value)}/></div>
+          </div>
+          <div className="fg" style={{ marginTop:12 }}><label className="fl">Commentaire complémentaire <span style={{ color:'#94a3b8', fontWeight:400, fontSize:11 }}>(commun à toutes les demandes)</span></label>
+            <textarea className="textarea" rows={2} value={multiCommentaire} onChange={e=>setMultiCommentaire(e.target.value)} placeholder="Précisions éventuelles"/></div>
+          <label style={{ display:'flex', alignItems:'center', gap:8, fontSize:13, color:'#374151', marginBottom:14 }}>
+            <input type="checkbox" checked={multiNotif} onChange={e=>setMultiNotif(e.target.checked)} style={{ width:15, height:15 }}/>
+            Envoyer les notifications par e-mail pour ces demandes
+          </label>
+
+          <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:12 }}>
+            <button className="btn btn-outline btn-sm" onClick={()=>setMultiPasteOpen(o=>!o)}>📋 Coller depuis Excel</button>
+            <a className="btn btn-outline btn-sm" href="/modele-demandes-distinction.xlsx" download style={{ textDecoration:'none' }}>⬇️ Modèle Excel</a>
+          </div>
+          {multiPasteOpen && <div style={{ background:'#f8faff', border:'1px solid #e5e7eb', borderRadius:10, padding:14, marginBottom:14 }}>
+            <div style={{ background:'#fffbeb', border:'1px solid #fbbf24', borderRadius:8, padding:'9px 12px', fontSize:12, color:'#92400e', marginBottom:10 }}>⚠️ Le copier-coller ne fonctionne qu'à partir du <strong>modèle Excel fourni</strong>. Copiez uniquement vos lignes de données, sans les en-têtes.</div>
+            <textarea className="textarea" rows={5} value={multiPaste} onChange={e=>setMultiPaste(e.target.value)} placeholder={"DUPONT\tMarie\tF\t15/03/2015\tMédaille de Bronze\tFormatrice\t\tMotivations détaillées…"}/>
+            <div style={{ display:'flex', gap:10, marginTop:8 }}>
+              <button className="btn btn-orange btn-sm" onClick={importerColle}>Importer les lignes</button>
+              <button className="btn btn-outline btn-sm" onClick={()=>{ setMultiPasteOpen(false); setMultiPaste(''); }}>Annuler</button>
+            </div>
+          </div>}
 
           {multiLignes.map((l, i) => {
             const m = medalTypes.find(x => x.id === l.medal);
@@ -3499,8 +3567,8 @@ a.mail{display:inline-block;margin-top:14px;background:#E87722;color:#fff;text-d
     { id:'dashboard', icon:'▦', label:'Tableau de bord' },
     { id:'demandes', icon:'📋', label:'Demandes', badge:role==='departement'?stats.toValDept:role==='antenne'?stats.toValAntenne:role==='commission'?stats.toValComm:null },
     ...(role==='departement'&&stats.tdrEnAttentePaiement>0?[{ id:'tdr_paiement', icon:'💳', label:'TDR à payer', badge:stats.tdrEnAttentePaiement }]:[]),
-    ...(canCreate?[{ id:'nouvelle', icon:'✚', label:'Nouvelle demande' }]:[]),
-    ...(canCreate?[{ id:'saisie_multiple', icon:'📋', label:'Saisie multiple' }]:[]),
+    ...(canCreate?[{ id:'saisie_multiple', icon:'✚', label:'Nouvelle demande' }]:[]),
+    ...(canCreate?[{ id:'nouvelle', icon:'🗑', label:'Nouvelle demande (à supprimer)' }]:[]),
     ...(role==='commission'?[{ id:'validation_table', icon:'☑️', label:'Validation (tableau)', badge:stats.toValComm||null }]:[]),
     ...(['antenne','departement','gestion'].includes(role)?[{ id:'statistiques', icon:'📈', label:'Statistiques' }]:[]),
     ...(role==='commission'?[{ id:'validation_rapide', icon:'⚡', label:'Validation rapide', badge:requests.filter(r=>r.statut==='en_commission'&&r.benevole.ans>=r.medalType.years).length||null }]:[]),
